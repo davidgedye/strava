@@ -1,0 +1,49 @@
+name: Fetch Strava Data
+# Fetches running data from Strava API daily
+
+on:
+  schedule:
+    - cron: "0 20 * * *"  # noon Pacific
+    - cron: "0 2 * * *"   # 6pm Pacific
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Fetch Strava data
+        id: fetch
+        env:
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+        run: bash fetch-strava.sh
+
+      - name: Update refresh token secret if rotated
+        if: steps.fetch.outputs.NEW_REFRESH_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh secret set STRAVA_REFRESH_TOKEN --body "${{ steps.fetch.outputs.NEW_REFRESH_TOKEN }}"
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/strava.json
+          git diff --cached --quiet && echo "No changes" && exit 0
+          # Amend the previous data commit to avoid cluttering history
+          if git log -1 --format='%s' | grep -q '^Update Strava data$'; then
+            git commit --amend --no-edit
+          else
+            git commit -m "Update Strava data"
+          fi
+          git push --force-with-lease
