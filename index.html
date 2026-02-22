@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Running Progress</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f1117;
+    color: #e1e4e8;
+    min-height: 100vh;
+    display: flex;
+    justify-content: center;
+    padding: 2rem 1rem;
+  }
+
+  .container {
+    max-width: 540px;
+    width: 100%;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    margin-bottom: 1.5rem;
+    color: #f0f0f0;
+    text-align: center;
+  }
+
+  .card {
+    background: #181b23;
+    border: 1px solid #2a2d37;
+    border-radius: 12px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 1rem;
+  }
+
+  .card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.5rem;
+  }
+
+  .card-title {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #8b8f98;
+  }
+
+  .card-pct {
+    font-size: 0.85rem;
+    color: #8b8f98;
+  }
+
+  .delta {
+    font-size: 2.2rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+  }
+
+  .delta .label {
+    font-size: 0.9rem;
+    font-weight: 400;
+  }
+
+  .delta-ahead  { color: #4ade80; }
+  .delta-close  { color: #facc15; }
+  .delta-behind { color: #f87171; }
+
+  .distance-row {
+    font-size: 0.95rem;
+    color: #8b8f98;
+    margin-bottom: 0.75rem;
+  }
+
+  .distance-row .actual {
+    color: #e1e4e8;
+    font-weight: 600;
+  }
+
+  .progress-track {
+    background: #2a2d37;
+    border-radius: 6px;
+    height: 10px;
+    position: relative;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+  }
+
+  .progress-fill {
+    height: 100%;
+    border-radius: 6px;
+    transition: width 0.6s ease;
+    min-width: 2px;
+  }
+
+  .expected-marker {
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    width: 2px;
+    background: #ffffff;
+    border-radius: 1px;
+  }
+
+  .bar-ahead  { background: #4ade80; }
+  .bar-close  { background: #facc15; }
+  .bar-behind { background: #f87171; }
+
+  .stats-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: #555;
+  }
+
+  .updated {
+    text-align: center;
+    font-size: 0.75rem;
+    color: #555;
+    margin-top: 1.5rem;
+  }
+
+  .error {
+    text-align: center;
+    color: #f87171;
+    padding: 2rem;
+  }
+  canvas#fireworks {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 999;
+  }
+</style>
+</head>
+<body>
+<canvas id="fireworks"></canvas>
+<div class="container">
+  <h1>Running Progress</h1>
+  <div id="content"><p class="card" style="color:#8b8f98;text-align:center">Loading&hellip;</p></div>
+  <div id="updated" class="updated"></div>
+</div>
+
+<script>
+(async function() {
+  const content = document.getElementById("content");
+  const updatedEl = document.getElementById("updated");
+
+  let goals, data;
+  try {
+    [goals, data] = await Promise.all([
+      fetch("goals.json").then(r => { if (!r.ok) throw new Error("goals.json not found"); return r.json(); }),
+      fetch("data/strava.json").then(r => { if (!r.ok) throw new Error("data/strava.json not found"); return r.json(); }),
+    ]);
+  } catch (e) {
+    content.innerHTML = '<p class="error">Failed to load data. ' + e.message + '</p>';
+    return;
+  }
+
+  const now = new Date();
+
+  // Weekly fraction (Monday = day 1, Sunday = day 7)
+  const jsDay = now.getDay(); // 0=Sun, 1=Mon, ...
+  const dayOfWeek = jsDay === 0 ? 7 : jsDay; // 1=Mon, 7=Sun
+  const weekFraction = dayOfWeek / 7;
+
+  // Monthly fraction
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const dayOfMonth = now.getDate();
+  const daysInMonth = Math.floor((monthEnd - monthStart) / 86400000);
+  const monthFraction = dayOfMonth / daysInMonth;
+
+  // Yearly fraction
+  const yearStart = new Date(now.getFullYear(), 0, 1);
+  const yearEnd = new Date(now.getFullYear() + 1, 0, 1);
+  const dayOfYear = Math.floor((now - yearStart) / 86400000) + 1;
+  const daysInYear = Math.floor((yearEnd - yearStart) / 86400000);
+  const yearFraction = dayOfYear / daysInYear;
+
+  function paceClass(delta, goal) {
+    const ratio = delta / Math.max(goal, 0.01);
+    if (ratio >= -0.02) return "ahead";
+    if (ratio >= -0.10) return "close";
+    return "behind";
+  }
+
+  function renderCard(title, distanceMi, goalMi, fraction) {
+    const pct = Math.min((distanceMi / goalMi) * 100, 100);
+    const expectedMi = goalMi * fraction;
+    const delta = distanceMi - expectedMi;
+    const pace = paceClass(delta, goalMi);
+
+    const sign = delta >= 0 ? "+" : "";
+    const deltaLabel = delta >= 0 ? "ahead of pace" : "behind pace";
+
+    const expectedPct = Math.min(fraction * 100, 100);
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">${title}</span>
+          <span class="card-pct">${pct.toFixed(0)}%</span>
+        </div>
+        <div class="delta delta-${pace}">
+          ${sign}${Math.abs(delta).toFixed(1)} mi <span class="label">${deltaLabel}</span>
+        </div>
+        <div class="distance-row">
+          <span class="actual">${distanceMi.toFixed(1)}</span> / ${goalMi} mi
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill bar-${pace}" style="width:${pct.toFixed(1)}%"></div>
+          <div class="expected-marker" style="left:${expectedPct.toFixed(1)}%"></div>
+        </div>
+        <div class="stats-row">
+          <span>Expected by today: ${expectedMi.toFixed(1)} mi</span>
+          <span>${(goalMi - distanceMi).toFixed(1)} mi remaining</span>
+        </div>
+      </div>`;
+  }
+
+  function renderLifetimeCard(distanceMi, goalMi) {
+    const pct = Math.min((distanceMi / goalMi) * 100, 100);
+    const remaining = goalMi - distanceMi;
+    const commas = n => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+
+    return `
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">This Life</span>
+          <span class="card-pct">${pct.toFixed(1)}%</span>
+        </div>
+        <div class="delta" style="color:#e1e4e8">
+          ${commas(distanceMi)} <span class="label">mi around the world</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" style="width:${pct.toFixed(2)}%;background:#818cf8"></div>
+        </div>
+        <div class="stats-row">
+          <span>${commas(remaining)} mi remaining</span>
+        </div>
+      </div>`;
+  }
+
+  content.innerHTML =
+    renderCard("This Week", data.week_distance_mi, goals.weekly_mi, weekFraction) +
+    renderCard("This Month", data.month_distance_mi, goals.monthly_mi, monthFraction) +
+    renderCard("This Year", data.ytd_distance_mi, goals.yearly_mi, yearFraction) +
+    renderLifetimeCard(data.lifetime_distance_mi, goals.lifetime_mi);
+
+  // Fireworks for completed goals
+  const completed = [];
+  if (data.week_distance_mi >= goals.weekly_mi) completed.push("week");
+  if (data.month_distance_mi >= goals.monthly_mi) completed.push("month");
+  if (data.ytd_distance_mi >= goals.yearly_mi) completed.push("year");
+
+  if (completed.length > 0) {
+    const canvas = document.getElementById("fireworks");
+    const ctx = canvas.getContext("2d");
+    let particles = [];
+    let rockets = [];
+    let animFrame;
+
+    function resize() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener("resize", resize);
+
+    // Intensity scales with how many goals are hit
+    const intensity = completed.length; // 1, 2, or 3
+    const colors = [
+      ["#4ade80", "#22c55e", "#86efac"],           // week: greens
+      ["#facc15", "#f59e0b", "#fde68a", "#4ade80"], // + month: add golds
+      ["#818cf8", "#c084fc", "#f472b6", "#facc15", "#4ade80", "#60a5fa", "#fb923c"], // + year: full rainbow
+    ][intensity - 1];
+
+    const rocketCount = [3, 6, 12][intensity - 1];
+    const particlesPerBurst = [30, 50, 80][intensity - 1];
+    const duration = [3000, 5000, 8000][intensity - 1];
+
+    // Audio: synthesize firework sounds with Web Audio API
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    function playBoom() {
+      // Burst noise
+      const bufferSize = audioCtx.sampleRate * 0.3;
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 3);
+      }
+      const noise = audioCtx.createBufferSource();
+      noise.buffer = buffer;
+
+      // Bandpass for a more realistic crackle
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = "bandpass";
+      filter.frequency.value = 800 + Math.random() * 600;
+      filter.Q.value = 0.5;
+
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.15 + Math.random() * 0.1;
+      gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+      noise.start();
+      noise.stop(audioCtx.currentTime + 0.4);
+
+      // Low thud
+      const osc = audioCtx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = 60 + Math.random() * 30;
+      const oscGain = audioCtx.createGain();
+      oscGain.gain.value = 0.3;
+      oscGain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.25);
+      osc.connect(oscGain);
+      oscGain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.25);
+    }
+
+    function playWhistle() {
+      const osc = audioCtx.createOscillator();
+      osc.type = "sine";
+      const dur = 0.3 + Math.random() * 0.3;
+      osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+      osc.frequency.linearRampToValueAtTime(1200 + Math.random() * 800, audioCtx.currentTime + dur);
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.06;
+      gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + dur);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + dur);
+    }
+
+    // Flash completed goal cards
+    const cardEls = document.querySelectorAll(".card");
+    const goalCards = []; // indices of completed goal cards
+    if (completed.includes("week")) goalCards.push(0);
+    if (completed.includes("month")) goalCards.push(1);
+    if (completed.includes("year")) goalCards.push(2);
+
+    function launchRocket() {
+      playWhistle();
+      rockets.push({
+        x: Math.random() * canvas.width * 0.6 + canvas.width * 0.2,
+        y: canvas.height,
+        targetY: Math.random() * canvas.height * 0.4 + canvas.height * 0.1,
+        speed: 4 + Math.random() * 3,
+        trail: [],
+      });
+    }
+
+    function burst(x, y) {
+      for (let i = 0; i < particlesPerBurst; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 5 + 1.5;
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1,
+          decay: 0.008 + Math.random() * 0.012,
+          color: colors[Math.floor(Math.random() * colors.length)],
+          size: Math.random() * 4 + 2,
+          flicker: Math.random() * Math.PI * 2, // phase offset for shimmer
+        });
+      }
+      // Add a few bright white sparks
+      for (let i = 0; i < 8; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = Math.random() * 6 + 2;
+        particles.push({
+          x, y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          life: 1,
+          decay: 0.025 + Math.random() * 0.02,
+          color: "#fff",
+          size: Math.random() * 2 + 1,
+          flicker: Math.random() * Math.PI * 2,
+        });
+      }
+    }
+
+    const startTime = Date.now();
+    const launchInterval = duration / rocketCount;
+    let nextLaunch = 0;
+
+    // Launch first rocket immediately
+    launchRocket();
+    nextLaunch = launchInterval;
+
+    function animate() {
+      const elapsed = Date.now() - startTime;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Launch rockets over time
+      if (elapsed > nextLaunch && nextLaunch < duration) {
+        launchRocket();
+        nextLaunch += launchInterval;
+      }
+
+      // Update rockets
+      for (let i = rockets.length - 1; i >= 0; i--) {
+        const r = rockets[i];
+        r.trail.push({ x: r.x, y: r.y });
+        if (r.trail.length > 6) r.trail.shift();
+        r.y -= r.speed;
+
+        // Draw trail
+        for (let j = 0; j < r.trail.length; j++) {
+          ctx.globalAlpha = j / r.trail.length * 0.5;
+          ctx.fillStyle = "#fff";
+          ctx.beginPath();
+          ctx.arc(r.trail[j].x, r.trail[j].y, 1.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        if (r.y <= r.targetY) {
+          burst(r.x, r.y);
+          playBoom();
+          // Flash completed cards
+          goalCards.forEach(idx => {
+            if (cardEls[idx]) {
+              cardEls[idx].style.transition = "none";
+              cardEls[idx].style.boxShadow = "0 0 30px rgba(255,255,255,0.5)";
+              cardEls[idx].style.borderColor = "#fff";
+              setTimeout(() => {
+                cardEls[idx].style.transition = "box-shadow 0.6s, border-color 0.6s";
+                cardEls[idx].style.boxShadow = "none";
+                cardEls[idx].style.borderColor = "#2a2d37";
+              }, 100);
+            }
+          });
+          rockets.splice(i, 1);
+        }
+      }
+
+      // Update particles
+      const t = elapsed * 0.001;
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.x += p.vx + (Math.random() - 0.5) * 0.5; // position noise
+        p.y += p.vy + (Math.random() - 0.5) * 0.5;
+        p.vy += 0.04; // gravity
+        p.life -= p.decay;
+
+        if (p.life <= 0) {
+          particles.splice(i, 1);
+          continue;
+        }
+
+        // Flickering brightness
+        const flicker = 0.7 + 0.3 * Math.sin(t * 12 + p.flicker);
+        ctx.globalAlpha = p.life * flicker;
+
+        // Glow layer
+        ctx.shadowColor = p.color;
+        ctx.shadowBlur = p.size * 4;
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Bright core
+        ctx.shadowBlur = 0;
+        ctx.globalAlpha = p.life * flicker * 0.6;
+        ctx.fillStyle = "#fff";
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * 0.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.shadowBlur = 0;
+
+      ctx.globalAlpha = 1;
+
+      if (elapsed < duration + 3000 || particles.length > 0 || rockets.length > 0) {
+        animFrame = requestAnimationFrame(animate);
+      }
+    }
+
+    animate();
+  }
+
+  if (data.updated_at) {
+    const d = new Date(data.updated_at);
+    updatedEl.textContent = "Last updated: " + d.toLocaleDateString(undefined, {
+      year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
+    });
+  }
+})();
+</script>
+</body>
+</html>
