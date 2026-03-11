@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Running History</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #0e0e0e; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    canvas { display: block; cursor: grab; }
+    #loading { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; color: #666; font-size: 14px; background: #0e0e0e; }
+    #status { position: fixed; bottom: 12px; left: 50%; transform: translateX(-50%); color: #444; font-size: 11px; pointer-events: none; letter-spacing: 0.5px; }
+    #back { position: fixed; top: 14px; right: 16px; color: #444; font-size: 12px; text-decoration: none; }
+    #back:hover { color: #999; }
+  </style>
+</head>
+<body>
+  <canvas id="viz"></canvas>
+  <div id="loading">Loading…</div>
+  <div id="status"></div>
+  <a id="back" href="index.html">← Dashboard</a>
+<script>
+'use strict';
+
+// ── CONFIG ───────────────────────────────────────────────────────────────────
+
+// Strip baseline: center of strip sits at vertical center of window
+const STRIP_H = 40;           // flat strip height in px
+
+const C = {
+  pageBg:      '#0e0e0e',
+  stripBg:     '#1c1c1c',
+  run:         '#fc4c02',   // Strava orange
+  other:       '#4a90d9',   // blue for non-runs
+  yearDiv:     'rgba(255,255,255,0.85)',
+  monthDiv:    'rgba(255,255,255,0.35)',
+  weekDiv:     'rgba(255,255,255,0.12)',
+  actDiv:      'rgba(255,255,255,0.06)',
+  labelBright: 'rgba(255,255,255,0.85)',
+  labelMid:    'rgba(255,255,255,0.55)',
+  labelDim:    'rgba(255,255,255,0.35)',
+};
+
+// [fadeInStart_px, fadeInEnd_px] for each element type,
+// measured in pixels of the *parent* segment
+const T = {
+  yearLabel:  [25,  70],    // year segment px
+  yearDist:   [70,  160],
+  monthDiv:   [120, 300],
+  monthLabel: [28,  65],    // month segment px
+  monthDist:  [65,  130],
+  weekDiv:    [130, 280],
+  weekLabel:  [35,  80],    // week segment px
+  actDiv:     [130, 260],
+  actLabel:   [50,  120],   // activity segment px
+  actTrack:   [40,  80],
+};
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const RUN_TYPES = new Set(['Run', 'Virtual Run', 'Trail Run']);
+
+// ── STATE ────────────────────────────────────────────────────────────────────
+
+let canvas, ctx, W, H, baseY;
+let isPortrait = false;    // true when H > W
+let viewLeft  = 0;         // leftmost visible mile (or topmost in portrait)
+let pxPerMile = 1;
+let totalMiles = 0;
+let drag = null;           // {rx, viewLeft} — rx in render coords
+let didDrag = false;
+let rafId = null;
+let renderedRoutes = [];   // [{id, x0, y0, x1, y1}] in render coords, rebuilt each frame
+
+function scheduleRender() {
+  if (!rafId) rafId = requestAnimationFrame(() => { rafId = null; render(); });
+}
+
+// Map screen (sx,sy) → render (rx,ry).
+// Portrait transform is translate(W,0) rotate(π/2), so render(rx,ry)→screen(W-ry,rx).
+// Inverse: rx=sy, ry=W-sx.
+function toRender(sx, sy) {
+  return isPortrait ? [sy, W - sx] : [sx, sy];
+}
+
+// ── DATA ─────────────────────────────────────────────────────────────────────
+
+let summary = null;
+const yearData  = {};  // year → full index (months/weeks/activities with startMi), or null on failure
+const trackData = {};  // activityId → {coords, aspectRatio} or null
+const inFlight  = new Set();
+
+async function ensureYear(year) {
+  const key = `y${year}`;
+  if (yearData[year] !== undefined || inFlight.has(key)) return;
+  inFlight.add(key);
+  try {
+    const d = await fetch(`data/history/${year}/index.json`).then(r => r.json());
+    const ys = summary.years.find(y => y.year === year);
+    let cum = ys.startMi;
+    for (const m of d.months) {
+      m.startMi = cum;
+      let mc = cum;
+      for (const w of m.weeks) {
+        w.startMi = mc;
+        let ac = mc;
+        for (const a of w.activities) { a.startMi = ac; ac += a.distance_mi; }
+        mc += w.distance_mi;
+      }
+      cum += m.distance_mi;
+    }
+    yearData[year] = d;
+    scheduleRender();
+  } catch (e) {
+    yearData[year] = null;
+    console.warn('Failed to load year', year, e);
+  }
+}
+
+async function ensureTrack(id, year, month) {
+  const key = `t${id}`;
+  if (trackData[id] !== undefined || inFlight.has(key)) return;
+  inFlight.add(key);
+  try {
+    const mm = String(month).padStart(2, '0');
+    const d = await fetch(`data/history/${year}/${mm}/${id}.json`).then(r => r.json());
+    trackData[id] = (d.track && d.track.coordinates.length > 1)
+      ? computePortraitRoute(d.track.coordinates)
+      : null;
+    scheduleRender();
+  } catch (e) {
+    trackData[id] = null;
+  }
+}
+
+// ── MATH HELPERS ─────────────────────────────────────────────────────────────
+
+const mi2x = mi => (mi - viewLeft) * pxPerMile;
+const x2mi = x  => x / pxPerMile + viewLeft;
+
+// Threshold helpers (kept for potential future use)
+function fin(px, [lo]) { return px >= lo ? 1 : 0; }
+
+function inView(startMi, distMi) {
+  const x0 = mi2x(startMi);
+  const rw = isPortrait ? H : W;
+  return x0 + distMi * pxPerMile > -20 && x0 < rw + 20;
+}
+
+// ── PCA PORTRAIT ROUTE ───────────────────────────────────────────────────────
+
+function computePortraitRoute(raw) {
+  // raw: [[lng, lat, ele?], ...] GeoJSON order
+  if (!raw || raw.length < 2) return null;
+
+  // Equirectangular projection to metres
+  const refLat = raw[0][1] * Math.PI / 180;
+  const cosLat = Math.cos(refLat);
+  const pts = raw.map(([lng, lat]) => [lng * cosLat * 111320, lat * 111320]);
+
+  // Centre
+  let mx = 0, my = 0;
+  for (const [x, y] of pts) { mx += x; my += y; }
+  mx /= pts.length; my /= pts.length;
+  const cen = pts.map(([x, y]) => [x - mx, y - my]);
+
+  // 2×2 covariance
+  let cxx = 0, cxy = 0, cyy = 0;
+  for (const [x, y] of cen) { cxx += x*x; cxy += x*y; cyy += y*y; }
+  cxx /= cen.length; cxy /= cen.length; cyy /= cen.length;
+
+  // Rotate principal axis to vertical
+  const theta = Math.PI / 2 - 0.5 * Math.atan2(2 * cxy, cxx - cyy);
+  const cos = Math.cos(theta), sin = Math.sin(theta);
+  const rot = cen.map(([x, y]) => [x * cos - y * sin, x * sin + y * cos]);
+
+  // Bounding box
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const [x, y] of rot) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (y < y0) y0 = y; if (y > y1) y1 = y;
+  }
+  const bw = x1 - x0, bh = y1 - y0;
+  if (bw < 1 || bh < 1) return null;
+
+  // Normalise: x → [0,1], y → [0, aspectRatio]
+  const coords = rot.map(([x, y]) => [(x - x0) / bw, (y - y0) / bw]);
+  return { coords, aspectRatio: bh / bw };
+}
+
+// ── DRAW HELPERS ─────────────────────────────────────────────────────────────
+
+function vline(x, y0, y1, color, width = 1) {
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = width;
+  ctx.beginPath();
+  ctx.moveTo(Math.round(x) + 0.5, y0);
+  ctx.lineTo(Math.round(x) + 0.5, y1);
+  ctx.stroke();
+}
+
+function label(str, x, y, font, color, align = 'center') {
+  ctx.font = font;
+  ctx.fillStyle = color;
+  if (isPortrait) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = align;
+    ctx.textBaseline = 'middle';
+    ctx.fillText(str, 0, 0);
+    ctx.restore();
+  } else {
+    ctx.textAlign = align;
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(str, x, y);
+  }
+}
+
+function cx(x0, x1) {
+  return Math.max(x0 + 4, Math.min(x1 - 4, (x0 + x1) / 2));
+}
+
+function wrapText(text, maxWidth) {
+  const words = text.split(' ');
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const test = line ? line + ' ' + word : word;
+    if (line && ctx.measureText(test).width > maxWidth) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = test;
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// ── RENDER ───────────────────────────────────────────────────────────────────
+
+function render() {
+  ctx.clearRect(0, 0, W, H);
+  renderedRoutes = [];
+  if (!summary) return;
+
+  if (isPortrait) {
+    ctx.save();
+    ctx.translate(W, 0);
+    ctx.rotate(Math.PI / 2);
+  }
+
+  const rw = isPortrait ? H : W;
+
+  // Strip background band
+  ctx.fillStyle = C.stripBg;
+  ctx.fillRect(0, baseY - STRIP_H, rw, STRIP_H);
+
+  for (const yr of summary.years) {
+    if (!inView(yr.startMi, yr.distance_mi)) continue;
+    const x0 = mi2x(yr.startMi), x1 = mi2x(yr.startMi + yr.distance_mi);
+    const yrPx = x1 - x0;
+
+    // Alternating year tint
+    ctx.fillStyle = yr.year % 2 === 0 ? '#202020' : '#191919';
+    ctx.fillRect(x0, baseY - STRIP_H, yrPx, STRIP_H);
+
+    // Year boundary divider
+    vline(x0, baseY - STRIP_H - 22, baseY, C.yearDiv, 1.5);
+
+    // Always load year data when in view so dividers can be drawn at any zoom
+    if (yearData[yr.year] === undefined) ensureYear(yr.year);
+
+    let showMonthLbl = false;
+    if (yearData[yr.year]) {
+      const avgMonthPx = yrPx / Math.max(1, yearData[yr.year].months.length);
+      showMonthLbl = avgMonthPx >= T.monthLabel[0];
+      renderMonths(yearData[yr.year].months, avgMonthPx);
+    }
+
+    if (yrPx >= T.yearLabel[0] && !showMonthLbl)
+      label(String(yr.year), cx(x0, x1), baseY - STRIP_H - 5, 'bold 13px sans-serif', C.labelBright);
+    if (yrPx >= T.yearDist[0] && !showMonthLbl)
+      label(`${Math.round(yr.run_distance_mi)} mi`, cx(x0, x1), baseY - STRIP_H - (isPortrait ? 52 : 19), '11px sans-serif', C.labelMid);
+  }
+
+  if (isPortrait) ctx.restore();
+  updateStatus();
+  preloadTracks();
+}
+
+function preloadTracks() {
+  if (!renderedRoutes.length) return;  // not zoomed in enough to show routes
+  const rw = isPortrait ? H : W;
+  const padMi = rw / pxPerMile;       // one screenful in miles
+  const lo = viewLeft - padMi;
+  const hi = viewLeft + rw / pxPerMile + padMi;
+  for (const yr of summary.years) {
+    if (!yearData[yr.year]) continue;
+    for (const m of yearData[yr.year].months) {
+      if (m.startMi + m.distance_mi < lo || m.startMi > hi) continue;
+      for (const w of m.weeks) {
+        for (const act of w.activities) {
+          if (act.distance_mi < 0.01) continue;
+          if (act.startMi + act.distance_mi < lo || act.startMi > hi) continue;
+          const dt = new Date(act.date);
+          ensureTrack(act.id, dt.getFullYear(), dt.getMonth() + 1);
+        }
+      }
+    }
+  }
+}
+
+function renderMonths(months, avgMonthPx) {
+  const showMonthLbl  = avgMonthPx >= T.monthLabel[0];
+  const showMonthDist = avgMonthPx >= T.monthDist[0];
+
+  for (const m of months) {
+    if (!inView(m.startMi, m.distance_mi)) continue;
+    const x0 = mi2x(m.startMi), x1 = mi2x(m.startMi + m.distance_mi);
+    const mPx = x1 - x0;
+
+    vline(x0, baseY - STRIP_H, baseY, C.monthDiv, 1);
+
+    const avgWeekPx = mPx / Math.max(1, m.weeks.length);
+    const showWeekLbl = avgWeekPx >= T.weekLabel[0];
+
+    if (showMonthLbl && !showWeekLbl)
+      label(MONTHS[m.month - 1], cx(x0, x1), baseY - STRIP_H - 5, '11px sans-serif', C.labelMid);
+    if (showMonthDist && !showWeekLbl)
+      label(`${Math.round(m.run_distance_mi)} mi`, cx(x0, x1), baseY - STRIP_H - (isPortrait ? 44 : 17), '10px sans-serif', C.labelDim);
+
+    renderWeeks(m.weeks, avgWeekPx);
+  }
+}
+
+function renderWeeks(weeks, avgWeekPx) {
+  const showWeekLbl = avgWeekPx >= T.weekLabel[0];
+  const showActs    = avgWeekPx >= T.actDiv[0];
+
+  for (const w of weeks) {
+    if (!inView(w.startMi, w.distance_mi)) continue;
+    const x0 = mi2x(w.startMi), x1 = mi2x(w.startMi + w.distance_mi);
+    const wPx = x1 - x0;
+
+    vline(x0, baseY - STRIP_H + 8, baseY, C.weekDiv, 0.5);
+
+    let showActLbl = false, showTrack = false;
+    if (showActs) {
+      const n = w.activities.filter(a => a.distance_mi >= 0.01).length;
+      const avgActPx = n > 0 ? wPx / n : wPx;
+      showActLbl = avgActPx >= T.actLabel[0];
+      showTrack  = avgActPx >= T.actTrack[0];
+    }
+
+    if (showWeekLbl && !showActLbl)
+      label(`${w.run_distance_mi.toFixed(0)} mi`, cx(x0, x1), baseY - STRIP_H - 4, '10px sans-serif', C.labelDim);
+
+    if (showActs) renderActivities(w.activities, showActLbl, showTrack);
+  }
+}
+
+function renderActivities(activities, showLabel, showTrack) {
+  for (const act of activities) {
+    if (act.distance_mi < 0.01) continue;
+    if (!inView(act.startMi, act.distance_mi)) continue;
+    const x0 = mi2x(act.startMi), x1 = mi2x(act.startMi + act.distance_mi);
+    const aPx = x1 - x0;
+    const color = RUN_TYPES.has(act.type) ? C.run : C.other;
+
+    vline(x0, baseY - STRIP_H + 16, baseY, C.actDiv, 0.5);
+
+    // Resolve route upfront so label can use the same bounding box
+    let route = null, routeH = 0, routeYBase = baseY;
+    if (showTrack) {
+      const dt = new Date(act.date);
+      ensureTrack(act.id, dt.getFullYear(), dt.getMonth() + 1);
+      route = trackData[act.id] || null;
+      if (route) {
+        routeH = aPx * route.aspectRatio;
+        routeYBase = baseY - (STRIP_H - routeH) / 2;
+      }
+    }
+
+    if (route) {
+      ctx.fillStyle = C.pageBg;
+      ctx.fillRect(x0, routeYBase - routeH, aPx, routeH);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(1, Math.min(2.5, aPx / 80));
+      ctx.lineCap = ctx.lineJoin = 'round';
+      ctx.beginPath();
+      let first = true;
+      for (const [nx, ny] of route.coords) {
+        first ? ctx.moveTo(x0 + nx * aPx, routeYBase - ny * aPx)
+              : ctx.lineTo(x0 + nx * aPx, routeYBase - ny * aPx);
+        first = false;
+      }
+      ctx.stroke();
+      renderedRoutes.push({ id: act.id, x0, y0: routeYBase - routeH, x1, y1: routeYBase });
+    } else {
+      ctx.fillStyle = color;
+      ctx.fillRect(x0, baseY - STRIP_H, Math.max(1, aPx - 1), STRIP_H);
+    }
+
+    if (showLabel && aPx > 30) {
+      // When the route breaks out of the strip, expand the label area to match
+      const clipTop = route ? routeYBase - routeH : baseY - STRIP_H;
+      const clipH   = route ? routeH               : STRIP_H;
+
+      ctx.font = '10px sans-serif';
+      if (isPortrait) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0, clipTop, aPx, clipH);
+        ctx.clip();
+        ctx.translate(cx(x0, x1), clipTop + clipH / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillStyle = C.labelBright;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        const lineH = 13;
+        const lines = wrapText(act.name, aPx - 8);
+        const totalH = lines.length * lineH;
+        const startY = -totalH / 2;
+        for (let i = 0; i < lines.length; i++)
+          ctx.fillText(lines[i], 0, startY + i * lineH);
+        ctx.restore();
+      } else {
+        const pad = 4;
+        const maxW = aPx - pad * 2;
+        const lineH = 13;
+        const lines = wrapText(act.name, maxW);
+        const totalH = lines.length * lineH;
+        const startY = clipTop + (clipH - totalH) / 2;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0 + pad, clipTop, maxW, clipH);
+        ctx.clip();
+        ctx.fillStyle = C.labelBright;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        for (let i = 0; i < lines.length; i++)
+          ctx.fillText(lines[i], x0 + pad, startY + i * lineH);
+        ctx.restore();
+      }
+    }
+  }
+}
+
+// ── STATUS BAR ───────────────────────────────────────────────────────────────
+
+function updateStatus() {
+  const rw = isPortrait ? H : W;
+  const vl = viewLeft, vr = viewLeft + rw / pxPerMile;
+  const vis = summary.years.filter(y => y.startMi + y.distance_mi > vl && y.startMi < vr);
+  if (!vis.length) return;
+  const a = vis[0].year, b = vis[vis.length - 1].year;
+  document.getElementById('status').textContent = a === b ? String(a) : `${a}–${b}`;
+}
+
+// ── HIT TEST ─────────────────────────────────────────────────────────────────
+
+// Returns the activity id of the rendered route under (rx, ry), or null.
+function hitTestActivity(rx, ry) {
+  for (const r of renderedRoutes) {
+    if (rx >= r.x0 && rx <= r.x1 && ry >= r.y0 && ry <= r.y1) return r.id;
+  }
+  return null;
+}
+
+// ── INPUT ────────────────────────────────────────────────────────────────────
+
+function onWheel(e) {
+  e.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const [rx] = toRender(e.clientX - rect.left, e.clientY - rect.top);
+  const anchorMi = x2mi(rx);
+  const factor   = Math.pow(1.001, -e.deltaY);
+  pxPerMile = Math.max(0.005, Math.min(10000, pxPerMile * factor));
+  viewLeft  = anchorMi - rx / pxPerMile;
+  scheduleRender();
+}
+
+function onMouseDown(e) {
+  const rect = canvas.getBoundingClientRect();
+  const [rx] = toRender(e.clientX - rect.left, e.clientY - rect.top);
+  drag = { rx, viewLeft };
+  didDrag = false;
+}
+function onMouseMove(e) {
+  const rect = canvas.getBoundingClientRect();
+  const [rx, ry] = toRender(e.clientX - rect.left, e.clientY - rect.top);
+  if (drag) {
+    if (Math.abs(rx - drag.rx) > 3) didDrag = true;
+    viewLeft = drag.viewLeft - (rx - drag.rx) / pxPerMile;
+    canvas.style.cursor = 'grabbing';
+    scheduleRender();
+    return;
+  }
+  const id = hitTestActivity(rx, ry);
+  canvas.style.cursor = id ? 'pointer' : 'grab';
+}
+function onMouseUp() { drag = null; }
+function onCanvasClick(e) {
+  if (didDrag) return;
+  const rect = canvas.getBoundingClientRect();
+  const [rx, ry] = toRender(e.clientX - rect.left, e.clientY - rect.top);
+  const id = hitTestActivity(rx, ry);
+  if (id) window.open(`https://www.strava.com/activities/${id}`, '_blank');
+}
+
+// Touch
+let touch = null;
+function touchDist(t) {
+  const dx = t[0].clientX - t[1].clientX, dy = t[0].clientY - t[1].clientY;
+  return Math.sqrt(dx*dx + dy*dy);
+}
+function touchRenderX(t) {
+  const rect = canvas.getBoundingClientRect();
+  return toRender(t.clientX - rect.left, t.clientY - rect.top)[0];
+}
+function onTouchStart(e) {
+  e.preventDefault();
+  if (e.touches.length === 1) {
+    const rx = touchRenderX(e.touches[0]);
+    touch = { type: 'pan', rx, viewLeft };
+  } else if (e.touches.length === 2) {
+    const rx = (touchRenderX(e.touches[0]) + touchRenderX(e.touches[1])) / 2;
+    touch = { type: 'pinch', dist: touchDist(e.touches), viewLeft, pxPerMile, anchorMi: x2mi(rx), rx };
+  }
+}
+function onTouchMove(e) {
+  e.preventDefault();
+  if (!touch) return;
+  if (touch.type === 'pan' && e.touches.length === 1) {
+    const rx = touchRenderX(e.touches[0]);
+    viewLeft = touch.viewLeft - (rx - touch.rx) / pxPerMile;
+  } else if (touch.type === 'pinch' && e.touches.length === 2) {
+    const rx = (touchRenderX(e.touches[0]) + touchRenderX(e.touches[1])) / 2;
+    pxPerMile = Math.max(0.005, Math.min(10000, touch.pxPerMile * touchDist(e.touches) / touch.dist));
+    viewLeft  = touch.anchorMi - rx / pxPerMile;
+  }
+  scheduleRender();
+}
+function onTouchEnd() { touch = null; }
+
+// ── INIT ─────────────────────────────────────────────────────────────────────
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  isPortrait = H > W;
+  canvas.width  = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  // In portrait the render space is rotated: render height = W (narrow dim)
+  const rh = isPortrait ? W : H;
+  baseY = Math.round(rh / 2 + STRIP_H / 2);
+  scheduleRender();
+}
+
+async function init() {
+  canvas = document.getElementById('viz');
+  ctx    = canvas.getContext('2d');
+  resize();
+  window.addEventListener('resize', resize);
+  canvas.addEventListener('wheel',      onWheel,        { passive: false });
+  canvas.addEventListener('mousedown',  onMouseDown);
+  window.addEventListener('mousemove',  onMouseMove);
+  window.addEventListener('mouseup',    onMouseUp);
+  canvas.addEventListener('click',      onCanvasClick);
+  canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+  canvas.addEventListener('touchmove',  onTouchMove,  { passive: false });
+  canvas.addEventListener('touchend',   onTouchEnd);
+
+  summary = await fetch('data/history/summary.json').then(r => r.json());
+
+  // Compute cumulative start miles for each year
+  let cum = 0;
+  for (const y of summary.years) { y.startMi = cum; cum += y.distance_mi; }
+  totalMiles = cum;
+
+  // Start zoomed in on recent activities; most recent at right edge with 5% padding
+  const rw = isPortrait ? H : W;
+  pxPerMile = 20;
+  viewLeft  = totalMiles - rw * 0.95 / pxPerMile;
+
+  document.getElementById('loading').style.display = 'none';
+  scheduleRender();
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>This Life · Planet Scale</title>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+    #map { width: 100%; height: 100%; }
+    #hud {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+      color: rgba(0,0,0,0.6);
+      font: 12px/1 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      letter-spacing: 0.5px; pointer-events: none; white-space: nowrap;
+      text-shadow: 0 1px 3px rgba(255,255,255,0.8);
+    }
+    #title-strip {
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      padding-top: max(env(safe-area-inset-top, 0px), 20px);
+      padding-bottom: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      pointer-events: none;
+    }
+    #title {
+      display: flex;
+      align-items: center;
+      position: relative;
+      color: rgba(255,255,255,0.75);
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      pointer-events: auto;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      text-shadow: 0 1px 6px rgba(0,0,0,0.8);
+    }
+    #btn-menu {
+      display: inline-block;
+      margin-left: 6px;
+      font-size: 18px;
+      vertical-align: middle;
+      pointer-events: auto;
+    }
+    #dropdown {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      min-width: 160px;
+      background: rgba(60,60,70,0.82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-radius: 0 0 12px 12px;
+      overflow: hidden;
+    }
+    #dropdown a {
+      display: block;
+      padding: 13px 20px;
+      color: rgba(255,255,255,0.8);
+      text-decoration: none;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+      font-size: 15px;
+      font-weight: 400;
+      letter-spacing: normal;
+      text-transform: none;
+      border-top: 1px solid rgba(255,255,255,0.07);
+    }
+    #dropdown a:first-child { border-top: none; }
+    #dropdown a:active { background: rgba(255,255,255,0.1); }
+    #loading {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: #555; font: 14px sans-serif; background: #000; z-index: 100;
+    }
+    #intro-text {
+      position: fixed;
+      top: calc(14% - 50px);
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: min(600px, 94vw);
+      color: rgba(255,255,255,0.88);
+      font: 15px/1.6 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+      text-shadow: 0 1px 10px rgba(0,0,0,0.7);
+      opacity: 0;
+      transition: opacity 0.7s ease;
+    }
+    @media (orientation: portrait) {
+      #intro-text { width: 75vw; max-width: 75vw; }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">Loading…</div>
+  <div id="title-strip">
+    <div id="title">
+      <span>Lifetime Miles</span><span id="btn-menu">&#9662;</span>
+      <div id="dropdown">
+        <a href="index.html">Today</a>
+        <a href="routes.html?period=week">This Week</a>
+        <a href="routes.html?period=month">This Month</a>
+        <a href="routes.html?period=year">This Year</a>
+      </div>
+    </div>
+  </div>
+  <div id="map"></div>
+  <div id="intro-text">My quixotic goal of running the circumference of the world is shown here, using a great circle through Seattle and Sydney. This flight terminates at the spot I have notionally reached so far. Many more miles to go.</div>
+  <div id="hud"></div>
+
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+  <script>
+'use strict';
+
+mapboxgl.accessToken = 'pk.eyJ1IjoiZGF2aWRnZWR5ZSIsImEiOiJjbWtvejk5bWkwYnBxM3JxNTE0ZjN6ZmowIn0.CaVScVkAo9uhpyebGqaQNg';
+
+// ── CONFIG ─────────────────────────────────────────────────────────────────────
+
+const EARTH_CIRCUM_MI = 24901.46;
+
+// Strip pixel height: doubles each zoom level, capped at 200px.
+const STRIP_PX_MAX = 40;
+
+const GRAY_A = '#fffacd';
+const GRAY_B = '#f5e88a';
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+// Zoom level at which we switch from year labels to month labels.
+const MON_ZOOM = 3.5;
+
+// Great circle: strip starts at CITY_A (t=0°) and heads toward CITY_B.
+const CITY_A = { name: 'Seattle', lat: 47.6062, lon: -122.3321 };
+const CITY_B = { name: 'Sydney',  lat: -33.8688, lon: 151.2093 };
+
+// ── GREAT CIRCLE MATH ─────────────────────────────────────────────────────────
+
+function toXYZ(lat, lon) {
+  const φ = lat * Math.PI / 180, λ = lon * Math.PI / 180;
+  return [Math.cos(φ) * Math.cos(λ), Math.cos(φ) * Math.sin(λ), Math.sin(φ)];
+}
+function norm(v) {
+  const d = Math.sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
+  return [v[0]/d, v[1]/d, v[2]/d];
+}
+function cross(a, b) {
+  return [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+}
+
+// Basis: e1 = City A, e2 points toward City B, N = pole
+const gcE1    = norm(toXYZ(CITY_A.lat, CITY_A.lon));
+const cityBxyz = norm(toXYZ(CITY_B.lat, CITY_B.lon));
+const gcN     = norm(cross(gcE1, cityBxyz));
+const gcE2    = norm(cross(gcN, gcE1));   // tangent at t=0, pointing toward City B
+
+// Arc position of City B in degrees
+const CITY_B_DEG = Math.acos(Math.max(-1, Math.min(1,
+  gcE1[0]*cityBxyz[0] + gcE1[1]*cityBxyz[1] + gcE1[2]*cityBxyz[2]
+))) * 180 / Math.PI;
+
+// Miles → arc degrees along the great circle
+const miToDeg = mi => mi * 360 / EARTH_CIRCUM_MI;
+
+// Arc degrees → { lat, lon }
+function arcToLatLon(deg) {
+  const t = deg * Math.PI / 180;
+  const x = Math.cos(t)*gcE1[0] + Math.sin(t)*gcE2[0];
+  const y = Math.cos(t)*gcE1[1] + Math.sin(t)*gcE2[1];
+  const z = Math.cos(t)*gcE1[2] + Math.sin(t)*gcE2[2];
+  return { lat: Math.asin(Math.max(-1, Math.min(1, z))) * 180/Math.PI,
+           lon: Math.atan2(y, x) * 180/Math.PI };
+}
+
+// Point at arc parameter deg, offset angH degrees perpendicular to the circle.
+// N is the pole so N·P = 0 for all P on the circle; offset = cos(angH)·P + sin(angH)·N.
+function offsetPoint(deg, angH) {
+  const t  = deg  * Math.PI / 180;
+  const aH = angH * Math.PI / 180;
+  const px = Math.cos(t)*gcE1[0] + Math.sin(t)*gcE2[0];
+  const py = Math.cos(t)*gcE1[1] + Math.sin(t)*gcE2[1];
+  const pz = Math.cos(t)*gcE1[2] + Math.sin(t)*gcE2[2];
+  const x = Math.cos(aH)*px + Math.sin(aH)*gcN[0];
+  const y = Math.cos(aH)*py + Math.sin(aH)*gcN[1];
+  const z = Math.cos(aH)*pz + Math.sin(aH)*gcN[2];
+  return { lat: Math.asin(Math.max(-1, Math.min(1, z))) * 180/Math.PI,
+           lon: Math.atan2(y, x) * 180/Math.PI };
+}
+
+// Forward bearing (degrees) along the great circle at arc position tDeg.
+function bearingAt(tDeg) {
+  const p1 = arcToLatLon(tDeg), p2 = arcToLatLon(tDeg + 0.05);
+  const φ1 = p1.lat * Math.PI / 180, φ2 = p2.lat * Math.PI / 180;
+  const Δλ = (p2.lon - p1.lon) * Math.PI / 180;
+  const y = Math.sin(Δλ) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(Δλ);
+  return Math.atan2(y, x) * 180 / Math.PI;
+}
+
+// Unwrap a sequence of [lon, lat] pairs so longitudes stay continuous
+// (no jumps > 180°). Mapbox globe accepts coords outside ±180.
+function unwrap(pts) {
+  for (let i = 1; i < pts.length; i++) {
+    while (pts[i][0] - pts[i-1][0] >  180) pts[i][0] -= 360;
+    while (pts[i-1][0] - pts[i][0] >  180) pts[i][0] += 360;
+  }
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+
+const fc = feats => ({ type: 'FeatureCollection', features: feats });
+
+// Compute angular half-width: how many degrees correspond to STRIP_PX/2 pixels.
+let map;
+function computeAngH() {
+  // At zoom z, one degree of arc = 512·2^z/360 px.
+  // Target strip width doubles each zoom level, capped at STRIP_PX_MAX.
+  const z      = map.getZoom();
+  const pxFull = Math.min(STRIP_PX_MAX, Math.max(1, Math.pow(2, z + 1)));
+  return pxFull * 180 / (512 * Math.pow(2, z));
+}
+
+// ── GEOMETRY BUILDERS ────────────────────────────────────────────────────────
+
+// Curved strip polygon from mi0 to mi1, angH degrees wide.
+function makeStripSegment(mi0, mi1, angH) {
+  const steps  = Math.max(2, Math.ceil((mi1 - mi0) / 150));
+  const topPts = [], botPts = [];
+  for (let i = 0; i <= steps; i++) {
+    const mi = mi0 + (mi1 - mi0) * i / steps;
+    const t  = miToDeg(mi);
+    const tp = offsetPoint(t,  angH);
+    const bp = offsetPoint(t, -angH);
+    topPts.push([tp.lon, tp.lat]);
+    botPts.push([bp.lon, bp.lat]);
+  }
+  // Unwrap each edge then align bot to top
+  unwrap(topPts);
+  unwrap(botPts);
+  const shift = Math.round((topPts[0][0] - botPts[0][0]) / 360) * 360;
+  for (const p of botPts) p[0] += shift;
+
+  const ring = [...topPts, ...[...botPts].reverse(), topPts[0]];
+  return { type: 'Polygon', coordinates: [ring] };
+}
+
+// Perpendicular divider line at arc position mi.
+function makeDivider(mi, angH, scale = 1) {
+  const t  = miToDeg(mi);
+  const tp = offsetPoint(t,  angH * scale);
+  const bp = offsetPoint(t, -angH * scale);
+  return { type: 'LineString', coordinates: [[tp.lon, tp.lat], [bp.lon, bp.lat]] };
+}
+
+function buildRunFills(angH) {
+  return fc(runSegs.map(s => ({
+    type: 'Feature', properties: { parity: s.parity, year: s.year, month: s.month },
+    geometry: makeStripSegment(s.mi0, s.mi1, angH),
+  })));
+}
+
+function buildYearDividers(angH) {
+  return fc(yearDivMi.map(mi => ({
+    type: 'Feature', properties: {},
+    geometry: makeDivider(mi, angH, 1.45),
+  })));
+}
+
+function buildMonthDividers(angH) {
+  return fc(monDivMi.map(mi => ({
+    type: 'Feature', properties: {},
+    geometry: makeDivider(mi, angH, 1.0),
+  })));
+}
+
+function buildRemain(angH) {
+  return fc([{
+    type: 'Feature', properties: {},
+    geometry: makeStripSegment(totalRunMiles, EARTH_CIRCUM_MI, angH),
+  }]);
+}
+
+// ── MAIN ──────────────────────────────────────────────────────────────────────
+
+// These are populated in main() and referenced by the builders above.
+let runSegs, yearDivMi, monDivMi, totalRunMiles;
+
+async function main() {
+  // 1 ── Year totals
+  const summary = await fetch('data/history/summary.json').then(r => r.json());
+  let cum = 0;
+  for (const y of summary.years) { y.startMi = cum; cum += y.run_distance_mi; }
+  totalRunMiles = cum;
+  const remainMiles = EARTH_CIRCUM_MI - totalRunMiles;
+
+  // 2 ── Month detail
+  const yearIndexes = {};
+  await Promise.all(summary.years.map(async y => {
+    try { yearIndexes[y.year] = await fetch(`data/history/${y.year}/index.json`).then(r => r.json()); }
+    catch { yearIndexes[y.year] = null; }
+  }));
+
+  // 3 ── Build geographic structure
+  runSegs    = [];
+  yearDivMi  = [];
+  monDivMi   = [];
+  const labelFeats = [];
+
+  for (let yi = 0; yi < summary.years.length; yi++) {
+    const yr     = summary.years[yi];
+    const idx    = yearIndexes[yr.year];
+    const parity = yi & 1;
+    const yrMidPt = arcToLatLon(miToDeg(yr.startMi + yr.run_distance_mi / 2));
+
+    yearDivMi.push(yr.startMi);
+    labelFeats.push({
+      type: 'Feature',
+      properties: { kind: 'year', line1: String(yr.year), line2: Math.round(yr.run_distance_mi) + ' mi' },
+      geometry: { type: 'Point', coordinates: [yrMidPt.lon, yrMidPt.lat] },
+    });
+
+    if (!idx) {
+      runSegs.push({ mi0: yr.startMi, mi1: yr.startMi + yr.run_distance_mi, parity, year: yr.year, month: null });
+      continue;
+    }
+
+    let mStart = yr.startMi;
+    for (const m of idx.months) {
+      const mMi = m.run_distance_mi ?? 0;
+      if (mMi > 0) {
+        const midPt = arcToLatLon(miToDeg(mStart + mMi / 2));
+        monDivMi.push(mStart);
+        runSegs.push({ mi0: mStart, mi1: mStart + mMi, parity, year: yr.year, month: m.month });
+        labelFeats.push({
+          type: 'Feature',
+          properties: { kind: 'month', line1: `${MONTHS[m.month - 1]} ${yr.year}`, line2: Math.round(mMi) + ' mi' },
+          geometry: { type: 'Point', coordinates: [midPt.lon, midPt.lat] },
+        });
+      }
+      mStart += mMi;
+    }
+  }
+
+  // Current month: last run segment that has a month value
+  const lastMonSeg    = [...runSegs].reverse().find(s => s.month !== null);
+  const curMonEndDeg  = miToDeg(lastMonSeg ? lastMonSeg.mi1 : totalRunMiles);
+  const curMonMidPt   = arcToLatLon(miToDeg(lastMonSeg ? (lastMonSeg.mi0 + lastMonSeg.mi1) / 2 : totalRunMiles));
+
+  const yetPt = arcToLatLon(miToDeg(totalRunMiles + remainMiles / 2));
+  labelFeats.push({
+    type: 'Feature',
+    properties: { kind: 'yet', line1: 'Yet to run', line2: Math.round(remainMiles).toLocaleString() + ' mi' },
+    geometry: { type: 'Point', coordinates: [yetPt.lon, yetPt.lat] },
+  });
+
+  // 4 ── Initialise map — start at Seattle facing forward, ready for the flight
+  const minDim      = Math.min(window.innerWidth, window.innerHeight);
+  const initialZoom = Math.log2(0.8 * minDim * Math.PI / 512);
+  const flightStart = arcToLatLon(0);
+
+  map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/standard',
+    projection: 'globe',
+    center: [flightStart.lon, flightStart.lat],
+    zoom: 4,
+    pitch: 65,
+    bearing: bearingAt(0),
+  });
+
+  map.addControl(new mapboxgl.NavigationControl({ showZoom: false, visualizePitch: true }), 'bottom-right');
+
+  // ── Title strip dropdown ───────────────────────────────────────────────────
+  const titleEl   = document.getElementById('title');
+  const dropdownEl = document.getElementById('dropdown');
+  function closeDropdown() { dropdownEl.style.display = ''; }
+  function openDropdown()  { dropdownEl.style.display = 'block'; }
+  titleEl.addEventListener('click', e => {
+    e.stopPropagation();
+    dropdownEl.style.display === 'block' ? closeDropdown() : openDropdown();
+  });
+  document.addEventListener('pointerdown', e => {
+    if (dropdownEl.style.display !== 'block') return;
+    if (!titleEl.contains(e.target)) closeDropdown();
+  });
+  map.getCanvas().addEventListener('pointerdown', () => {
+    if (dropdownEl.style.display === 'block') closeDropdown();
+  }, { capture: true });
+  // Dropdown links navigate away — stop click bubbling to titleEl to avoid toggle
+  dropdownEl.querySelectorAll('a').forEach(a => {
+    a.addEventListener('click', e => e.stopPropagation());
+  });
+
+  map.on('style.load', () => {
+    document.getElementById('loading').style.display = 'none';
+
+    // Fade in intro text (deferred so the transition fires)
+    const introTextEl = document.getElementById('intro-text');
+    requestAnimationFrame(() => { introTextEl.style.opacity = '1'; });
+
+    // Fade out as pitch approaches 0 — covers both natural finish and interruption
+    map.on('pitch', () => {
+      const p = map.getPitch();
+      // Full opacity at pitch ≥ 25°, invisible at pitch ≤ 5°
+      const t = Math.max(0, Math.min(1, (p - 5) / 20));
+      introTextEl.style.opacity = String(t);
+    });
+
+    // Night preset gives a dark globe similar to dark-v11
+    map.setConfigProperty('basemap', 'lightPreset', 'day');
+
+    map.setFog({
+      color: 'rgb(186, 210, 235)', 'high-color': '#245bde',
+      'horizon-blend': 0.02, 'space-color': '#000000', 'star-intensity': 0.6,
+    });
+
+    const angH0 = computeAngH();
+
+    // ── Sources ──────────────────────────────────────────────────────────────
+    map.addSource('run-fills',      { type: 'geojson', data: buildRunFills(angH0) });
+    map.addSource('year-dividers',  { type: 'geojson', data: buildYearDividers(angH0) });
+    map.addSource('month-dividers', { type: 'geojson', data: buildMonthDividers(angH0) });
+    map.addSource('remain',         { type: 'geojson', data: buildRemain(angH0) });
+    map.addSource('labels',         { type: 'geojson', data: fc(labelFeats) });
+
+    // ── Strip geometry layers (below map text labels) ─────────────────────
+    // slot: 'top' renders above all map content including symbol/label layers
+    map.addLayer({
+      slot: 'top', id: 'strip-fill', type: 'fill', source: 'run-fills',
+      paint: {
+        'fill-color': ['case', ['==', ['get', 'parity'], 0], GRAY_A, GRAY_B],
+        'fill-opacity': 1.0,
+        'fill-emissive-strength': 1,
+      },
+    });
+    map.addLayer({
+      slot: 'top', id: 'year-dividers', type: 'line', source: 'year-dividers',
+      paint: { 'line-color': 'rgba(0,0,0,0.6)', 'line-width': 1.5, 'line-emissive-strength': 1 },
+    });
+    map.addLayer({
+      slot: 'top', id: 'month-dividers', type: 'line', source: 'month-dividers',
+      minzoom: MON_ZOOM,
+      paint: { 'line-color': 'rgba(0,0,0,0.6)', 'line-width': 0.5, 'line-emissive-strength': 1 },
+    });
+    map.addLayer({
+      slot: 'top', id: 'remain-fill', type: 'fill', source: 'remain',
+      paint: { 'fill-color': '#90ee90', 'fill-opacity': 0.35, 'fill-emissive-strength': 1 },
+    });
+    map.addLayer({
+      slot: 'top', id: 'remain-outline', type: 'line', source: 'remain',
+      paint: { 'line-color': 'rgba(0,0,0,0.35)', 'line-width': 1.5, 'line-dasharray': [4, 3], 'line-emissive-strength': 1 },
+    });
+
+    // ── Label layers ──────────────────────────────────────────────────────────
+    const labelFont     = ['DIN Offc Pro Regular', 'Arial Unicode MS Regular'];
+    const labelFontBold = ['DIN Offc Pro Bold',    'Arial Unicode MS Regular'];
+
+    map.addLayer({
+      slot: 'top', id: 'year-labels', type: 'symbol', source: 'labels',
+      maxzoom: MON_ZOOM,
+      filter: ['==', ['get', 'kind'], 'year'],
+      layout: {
+        'text-field': ['format', ['get', 'line1'], {}, '\n', {}, ['get', 'line2'], { 'font-scale': 0.85 }],
+        'text-font': labelFontBold,
+        'text-size': 11,
+        'text-allow-overlap': false,
+      },
+      paint: { 'text-color': 'rgba(0,0,0,0.85)' },
+    });
+    map.addLayer({
+      slot: 'top', id: 'month-labels', type: 'symbol', source: 'labels',
+      minzoom: MON_ZOOM,
+      filter: ['==', ['get', 'kind'], 'month'],
+      layout: {
+        'text-field': ['format', ['get', 'line1'], {}, '\n', {}, ['get', 'line2'], { 'font-scale': 0.9 }],
+        'text-font': labelFont,
+        'text-size': 10,
+        'text-allow-overlap': false,
+      },
+      paint: { 'text-color': 'rgba(0,0,0,0.85)' },
+    });
+    map.addLayer({
+      slot: 'top', id: 'yet-label', type: 'symbol', source: 'labels',
+      filter: ['==', ['get', 'kind'], 'yet'],
+      layout: {
+        'text-field': ['format', ['get', 'line1'], {}, '\n', {}, ['get', 'line2'], { 'font-scale': 0.85 }],
+        'text-font': labelFont,
+        'text-size': 13,
+      },
+      paint: { 'text-color': 'rgba(0,0,0,0.45)' },
+    });
+
+    // ── Click to navigate to routes page ────────────────────────────────────
+    map.on('click', 'strip-fill', e => {
+      const { year, month } = e.features[0].properties;
+      const showMon = map.getZoom() >= MON_ZOOM;
+      const period  = (showMon && month)
+        ? `${year}-${String(month).padStart(2, '0')}`
+        : String(year);
+      window.location.href = `routes.html?period=${period}`;
+    });
+    map.on('mouseenter', 'strip-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
+    map.on('mouseleave', 'strip-fill', () => { map.getCanvas().style.cursor = ''; });
+
+    // ── Update strip geometry on zoom (skip during flight — zoom is fixed) ───
+    map.on('zoom', () => {
+      if (!flightDone) return;
+      const angH = computeAngH();
+      map.getSource('run-fills').setData(buildRunFills(angH));
+      map.getSource('year-dividers').setData(buildYearDividers(angH));
+      map.getSource('month-dividers').setData(buildMonthDividers(angH));
+      map.getSource('remain').setData(buildRemain(angH));
+    });
+
+    const first  = summary.years[0].year;
+    const last   = summary.years[summary.years.length - 1].year;
+    const hudEl  = document.getElementById('hud');
+    const hudBase = `${Math.round(totalRunMiles).toLocaleString()} mi · ${first}–${last}`;
+
+    function updateHud() {
+      hudEl.textContent = `${hudBase}   zoom ${map.getZoom().toFixed(2)}`;
+    }
+    updateHud();
+    map.on('zoom', updateHud);
+
+    // ── Intro flight ──────────────────────────────────────────────────────────
+    const T_START      = 0;                      // start at Seattle
+    const T_END        = miToDeg(totalRunMiles); // end at current running endpoint
+    const FLIGHT_ZOOM  = 4;
+    const FLIGHT_PITCH = 65;
+
+    let flightId;
+    let flightDone = false;
+
+    function finishFlight(userInterrupted) {
+      if (flightDone) return;
+      flightDone = true;
+      cancelAnimationFrame(flightId);
+      // Rebuild geometry for the current zoom (was skipped during flight)
+      const angH = computeAngH();
+      map.getSource('run-fills').setData(buildRunFills(angH));
+      map.getSource('year-dividers').setData(buildYearDividers(angH));
+      map.getSource('month-dividers').setData(buildMonthDividers(angH));
+      map.getSource('remain').setData(buildRemain(angH));
+      map.setPaintProperty('month-dividers', 'line-opacity', 1);
+      map.setLayoutProperty('month-labels', 'visibility', 'visible');
+      map.setLayerZoomRange('year-labels', 0, MON_ZOOM);
+      map.off('mousedown', interruptFlight);
+      map.off('touchstart', interruptFlight);
+      if (userInterrupted) {
+        // Stay where we are — just level out pitch/bearing so the user can explore freely
+        map.easeTo({ bearing: 0, pitch: 0, duration: 800 });
+      } else {
+        map.flyTo({
+          center:   [curMonMidPt.lon, curMonMidPt.lat],
+          zoom:     5.5,
+          bearing:  0,
+          pitch:    0,
+          duration: 2000,
+        });
+      }
+    }
+
+    function interruptFlight() { finishFlight(true); }
+
+    map.setPaintProperty('month-dividers', 'line-opacity', 0);
+    map.setLayoutProperty('month-labels', 'visibility', 'none');
+    map.setLayerZoomRange('year-labels', 0, 24);
+    map.on('mousedown', interruptFlight);
+    map.on('touchstart', interruptFlight);
+
+    const flightT0 = performance.now();
+    (function frame(now) {
+      const raw  = Math.min(1, (now - flightT0) / 30000);
+      const ease = 0.5 * (1 - Math.cos(Math.PI * raw));
+      const t    = T_START + (T_END - T_START) * ease;
+      map.jumpTo({ center: [arcToLatLon(t).lon, arcToLatLon(t).lat], bearing: bearingAt(t), pitch: FLIGHT_PITCH, zoom: FLIGHT_ZOOM });
+      if (raw < 1) { flightId = requestAnimationFrame(frame); }
+      else { finishFlight(false); }
+    })(performance.now());
+  });
+
+  map.on('error', e => console.warn('Map error:', e.error?.message ?? e));
+}
+
+main().catch(err => {
+  document.getElementById('loading').textContent = 'Error: ' + err.message;
+  console.error(err);
+});
+  </script>
+</body>
+</html>
