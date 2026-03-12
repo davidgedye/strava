@@ -307,6 +307,27 @@ function navigate(period) {
 
 // ── Zoom / pan state ──────────────────────────────────────────────────────────
 let userZoom = 1, userPanX = 0, userPanY = 0;
+let animFrameId = null;
+
+function cancelAnim() {
+  if (animFrameId !== null) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+}
+
+function animateTo(toZoom, toPanX, toPanY, duration = 350) {
+  cancelAnim();
+  const fromZoom = userZoom, fromPanX = userPanX, fromPanY = userPanY;
+  const start = performance.now();
+  function step(now) {
+    const raw = Math.min(1, (now - start) / duration);
+    const t   = 0.5 - 0.5 * Math.cos(Math.PI * raw);  // ease in-out
+    userZoom = fromZoom + (toZoom  - fromZoom) * t;
+    userPanX = fromPanX + (toPanX  - fromPanX) * t;
+    userPanY = fromPanY + (toPanY  - fromPanY) * t;
+    render(periodData);
+    animFrameId = raw < 1 ? requestAnimationFrame(step) : null;
+  }
+  animFrameId = requestAnimationFrame(step);
+}
 
 function resetView() { userZoom = 1; userPanX = 0; userPanY = 0; }
 
@@ -435,6 +456,7 @@ canvas.addEventListener('pointerdown', e => {
   activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
 
   if (activePointers.size === 1) {
+    cancelAnim();
     dragAnchor = { x: e.clientX, y: e.clientY, panX: userPanX, panY: userPanY };
     didDrag = false;
     pinchStart = null;
@@ -487,7 +509,7 @@ canvas.addEventListener('pointerup', e => {
   // Double-tap → reset view (only for single-finger taps)
   if (activePointers.size === 1 && !didDrag) {
     const now = Date.now();
-    if (now - lastTapTime < 300) { resetView(); render(periodData); }
+    if (now - lastTapTime < 300) { cancelAnim(); resetView(); render(periodData); }
     lastTapTime = now;
   }
   activePointers.delete(e.pointerId);
@@ -516,7 +538,7 @@ canvas.addEventListener('wheel', e => {
   render(periodData);
 }, { passive: false });
 
-// ── Click → Strava ────────────────────────────────────────────────────────────
+// ── Click → zoom-to-fit or Strava ─────────────────────────────────────────────
 canvas.addEventListener('click', e => {
   if (dropdown.style.display === 'block') { closeDropdown(); return; }
   if (didDrag) { didDrag = false; return; }
@@ -542,7 +564,33 @@ canvas.addEventListener('click', e => {
     }
   }
 
-  if (best) location.href = 'https://www.strava.com/activities/' + best.id;
+  if (!best) return;
+
+  const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
+  const vw    = window.innerWidth;
+  const avail = window.innerHeight - topH;
+
+  const rw_px    = (best.maxX - best.minX) * lastFit * userZoom;
+  const rh_px    = (best.maxY - best.minY) * lastFit * userZoom;
+  const routeLong = Math.max(rw_px, rh_px);
+  const spaceLong = Math.max(vw, avail);
+
+  if (routeLong >= 0.8 * spaceLong || userZoom >= MAX_ZOOM) {
+    // Route is already full-screen → go to Strava
+    location.href = 'https://www.strava.com/activities/' + best.id;
+  } else {
+    // Zoom to fill ~80% of available space, centred on the route
+    const rw = Math.max(best.maxX - best.minX, 0.001);
+    const rh = Math.max(best.maxY - best.minY, 0.001);
+    const targetZoom = Math.max(1, Math.min(MAX_ZOOM,
+      Math.min(0.8 * vw / (rw * lastFit), 0.8 * avail / (rh * lastFit))
+    ));
+    const rcx = (best.minX + best.maxX) / 2;
+    const rcy = (best.minY + best.maxY) / 2;
+    const toPanX = vw / 2           - targetZoom * (rcx * lastFit + lastOx);
+    const toPanY = topH + avail / 2 - targetZoom * (rcy * lastFit + lastOy);
+    animateTo(targetZoom, toPanX, toPanY);
+  }
 });
 
 // ── Data loading ──────────────────────────────────────────────────────────────
