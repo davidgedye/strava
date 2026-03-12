@@ -366,22 +366,34 @@ function render(data) {
   renderedBboxes = [];
 
   for (const act of acts) {
-    const pts = act.coords;
-    if (!pts || pts.length < 2) continue;
-
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     ctx.strokeStyle = act.color;
-    ctx.beginPath();
-    let first = true;
-    for (const [dlng, dlat] of pts) {
-      const x = act.dx + dlng * scale * cosLat;
-      const y = act.dy - dlat * scale;
-      if (x < minX) minX = x; if (x > maxX) maxX = x;
-      if (y < minY) minY = y; if (y > maxY) maxY = y;
-      if (first) { ctx.moveTo(x, y); first = false; }
-      else         ctx.lineTo(x, y);
+
+    let minX, maxX, minY, maxY;
+
+    if (act.circle_radius != null) {
+      // Untracked run: circle whose circumference equals the distance
+      const r = act.circle_radius * scale;
+      ctx.beginPath();
+      ctx.arc(act.dx, act.dy, r, 0, 2 * Math.PI);
+      ctx.stroke();
+      minX = act.dx - r; maxX = act.dx + r;
+      minY = act.dy - r; maxY = act.dy + r;
+    } else {
+      const pts = act.coords;
+      if (!pts || pts.length < 2) continue;
+      minX = Infinity; maxX = -Infinity; minY = Infinity; maxY = -Infinity;
+      ctx.beginPath();
+      let first = true;
+      for (const [dlng, dlat] of pts) {
+        const x = act.dx + dlng * scale * cosLat;
+        const y = act.dy - dlat * scale;
+        if (x < minX) minX = x; if (x > maxX) maxX = x;
+        if (y < minY) minY = y; if (y > maxY) maxY = y;
+        if (first) { ctx.moveTo(x, y); first = false; }
+        else         ctx.lineTo(x, y);
+      }
+      ctx.stroke();
     }
-    ctx.stroke();
 
     renderedBboxes.push({ id: act.id, minX, maxX, minY, maxY, dx: act.dx, dy: act.dy });
 

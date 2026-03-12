@@ -35,6 +35,9 @@ CSS_MARGIN  = STROKE_CSS * 2 + PADDING_CSS   # 12 px per route
 
 MAX_PTS = {'week': 500, 'month': 250, 'year': 200}
 
+MILES_PER_DEG_LAT = 69.0   # approximate; used for circle radius calculation
+COS_LAT_DEFAULT   = 0.674  # cos(47.6°) — Seattle-area average
+
 # ── Colour ─────────────────────────────────────────────────────────────────────
 
 L_OLD = 22    # lightness % for oldest activity
@@ -111,7 +114,7 @@ def load_all_runs(history_dir):
     return sorted(result, key=lambda a: a['date'])
 
 
-# ── Route geometry ─────────────────────────────────────────────────────────────
+# ── Route / circle geometry ────────────────────────────────────────────────────
 
 def extract_route(act, max_pts):
     raw = act['track']['coordinates']
@@ -140,6 +143,22 @@ def extract_route(act, max_pts):
     if act.get('distance_mi') is not None:
         result['distance_mi'] = act['distance_mi']
     return result
+
+
+def extract_circle(act):
+    """For untracked runs: circular placeholder whose circumference equals the distance."""
+    dist     = act.get('distance_mi') or 0
+    r_deg    = dist / (2 * math.pi * MILES_PER_DEG_LAT)
+    return {
+        'id':            str(act['id']),
+        'name':          act.get('name', ''),
+        'date':          act['date'],
+        'cos_lat':       COS_LAT_DEFAULT,
+        'span_lat':      2 * r_deg,
+        'span_lng':      2 * r_deg / COS_LAT_DEFAULT,  # makes bounding box square
+        'circle_radius': r_deg,
+        'distance_mi':   dist,
+    }
 
 
 # ── Shelf packing ──────────────────────────────────────────────────────────────
@@ -243,44 +262,52 @@ def shelf_positions_css(routes, css_scale, cw=CANVAS_W, ch=CANVAS_H):
 
 # ── Period layout ──────────────────────────────────────────────────────────────
 
-def compute_layout(activities, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H,
-                   all_runs=None):
+def compute_layout(runs, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H):
     """
-    kind     : 'week' | 'month' | 'year'  (controls point-count simplification)
-    all_runs : all runs in period (tracked + untracked) for mileage total;
-               defaults to activities if not supplied
+    runs : all runs in period (tracked + untracked)
+    kind : 'week' | 'month' | 'year'  (controls point-count simplification)
     Returns dict ready for JSON.
     """
-    routes = [extract_route(a, MAX_PTS[kind]) for a in activities]
+    tracked   = [a for a in runs if a.get('has_track')]
+    untracked = [a for a in runs if not a.get('has_track') and (a.get('distance_mi') or 0) > 0]
 
-    if not routes:
-        return {'scale': 1000.0, 'cos_lat': 0.674, 'total_miles': 0, 'activities': []}
+    routes  = [extract_route(a, MAX_PTS[kind]) for a in tracked]
+    circles = [extract_circle(a) for a in untracked]
 
-    n = len(routes)
-    for rank, r in enumerate(routes):
-        r['color'] = route_color(rank, n)
+    # Merge and sort by date so colour ranking spans both tracked and untracked
+    items = sorted(routes + circles, key=lambda r: r['date'])
 
-    css_scale = max_shelf_css_scale(routes, canvas_w, canvas_h)
-    positions = shelf_positions_css(routes, css_scale, canvas_w, canvas_h)
+    if not items:
+        return {'scale': 1000.0, 'cos_lat': COS_LAT_DEFAULT, 'total_miles': 0,
+                'canvas_w': canvas_w, 'canvas_h': canvas_h, 'activities': []}
 
-    avg_cos = sum(r['cos_lat'] for r in routes) / n
+    n = len(items)
+    for rank, item in enumerate(items):
+        item['color'] = route_color(rank, n)
+
+    css_scale = max_shelf_css_scale(items, canvas_w, canvas_h)
+    positions = shelf_positions_css(items, css_scale, canvas_w, canvas_h)
+
+    avg_cos = sum(r['cos_lat'] for r in items) / n
     out = []
-    for r, (dx, dy) in zip(routes, positions):
+    for item, (dx, dy) in zip(items, positions):
         entry = {
-            'id':     r['id'],
-            'name':   r['name'],
-            'date':   r['date'],
-            'color':  r['color'],
-            'dx':     round(dx, 1),
-            'dy':     round(dy, 1),
-            'coords': [[round(c[0], 6), round(c[1], 6)] for c in r['rel_coords']],
+            'id':    item['id'],
+            'name':  item['name'],
+            'date':  item['date'],
+            'color': item['color'],
+            'dx':    round(dx, 1),
+            'dy':    round(dy, 1),
         }
-        if r.get('distance_mi') is not None:
-            entry['distance_mi'] = round(r['distance_mi'])
+        if 'circle_radius' in item:
+            entry['circle_radius'] = round(item['circle_radius'], 4)
+        else:
+            entry['coords'] = [[round(c[0], 4), round(c[1], 4)] for c in item['rel_coords']]
+        if item.get('distance_mi') is not None:
+            entry['distance_mi'] = round(item['distance_mi'])
         out.append(entry)
 
-    mile_source = all_runs if all_runs is not None else activities
-    total_miles = sum(a.get('distance_mi') or 0 for a in mile_source)
+    total_miles = sum(a.get('distance_mi') or 0 for a in runs)
     return {
         'scale':       round(css_scale, 4),
         'cos_lat':     round(avg_cos, 6),
@@ -294,8 +321,10 @@ def compute_layout(activities, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H,
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 def main():
-    history_dir = sys.argv[1] if len(sys.argv) > 1 else 'data/history'
-    output_dir  = sys.argv[2] if len(sys.argv) > 2 else 'data/layouts'
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    force = '--force' in sys.argv
+    history_dir = args[0] if len(args) > 0 else 'data/history'
+    output_dir  = args[1] if len(args) > 1 else 'data/layouts'
 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -304,29 +333,23 @@ def main():
     print(f"Current: week from {cur['week_start'].date()}, "
           f"month={cur['month']}, year={cur['year']}", file=sys.stderr)
 
-    # Load all runs (for mileage totals) and tracked subset (for layout)
+    # Load all runs (tracked + untracked); compute_layout handles the split
     print("Loading all run activities…", file=sys.stderr)
     t0 = time.time()
     all_runs = load_all_runs(history_dir)
-    all_acts = [a for a in all_runs if a.get('has_track')]
-    print(f"  {len(all_runs)} runs total, {len(all_acts)} with GPS track, "
+    n_tracked = sum(1 for a in all_runs if a.get('has_track'))
+    print(f"  {len(all_runs)} runs total, {n_tracked} with GPS track, "
           f"in {time.time()-t0:.1f}s", file=sys.stderr)
 
     # Group by month and year — always include current periods even if empty
-    # by_*: tracked only (for layout);  miles_by_*: all runs (for totals)
-    by_month       = {cur['month']: []}
-    by_year        = {cur['year']:  []}
-    miles_by_month = {cur['month']: []}
-    miles_by_year  = {cur['year']:  []}
+    by_month = {cur['month']: []}
+    by_year  = {cur['year']:  []}
     for act in all_runs:
         dt = parse_dt(act['date'])
         mk = f"{dt.year}-{dt.month:02d}"
         yk = str(dt.year)
-        miles_by_month.setdefault(mk, []).append(act)
-        miles_by_year.setdefault(yk,  []).append(act)
-        if act.get('has_track'):
-            by_month.setdefault(mk, []).append(act)
-            by_year.setdefault(yk,  []).append(act)
+        by_month.setdefault(mk, []).append(act)
+        by_year.setdefault(yk,  []).append(act)
 
     all_month_keys = sorted(by_month.keys(), reverse=True)
     all_year_keys  = sorted(by_year.keys(),  reverse=True)
@@ -343,61 +366,54 @@ def main():
 
         # ── Week ──────────────────────────────────────────────────────────────
         print(f"\n── week{suffix} …", file=sys.stderr)
-        week_acts = [a for a in all_acts
-                     if cur['week_start'] <= parse_dt(a['date']) < cur['now']]
         week_runs = [a for a in all_runs
                      if cur['week_start'] <= parse_dt(a['date']) < cur['now']]
         t0 = time.time()
-        data = compute_layout(week_acts, 'week', cw, ch, all_runs=week_runs)
+        data = compute_layout(week_runs, 'week', cw, ch)
         (out / f'week{suffix}.json').write_text(json.dumps(data, separators=(',', ':')))
-        print(f"  {len(week_acts)} tracked / {len(week_runs)} total, "
+        print(f"  {sum(1 for a in week_runs if a.get('has_track'))} tracked / {len(week_runs)} total, "
               f"{time.time()-t0:.1f}s", file=sys.stderr)
 
         # ── Months ────────────────────────────────────────────────────────────
         for mk in all_month_keys:
             is_current = (mk == cur['month'])
             dest = out / f'{mk}{suffix}.json'
-            if not is_current and dest.exists():
+            if not is_current and dest.exists() and not force:
                 print(f"\n── {mk}{suffix} … skipped (cached)", file=sys.stderr)
                 continue
-            acts = ([a for a in by_month.get(mk, []) if parse_dt(a['date']) < cur['now']]
+            runs = ([a for a in by_month.get(mk, []) if parse_dt(a['date']) < cur['now']]
                     if is_current else by_month.get(mk, []))
-            runs = ([a for a in miles_by_month.get(mk, []) if parse_dt(a['date']) < cur['now']]
-                    if is_current else miles_by_month.get(mk, []))
             print(f"\n── {mk}{suffix} …", file=sys.stderr)
             t0 = time.time()
-            data = compute_layout(acts, 'month', cw, ch, all_runs=runs)
+            data = compute_layout(runs, 'month', cw, ch)
             dest.write_text(json.dumps(data, separators=(',', ':')))
-            print(f"  {len(acts)} tracked / {len(runs)} total, "
+            print(f"  {sum(1 for a in runs if a.get('has_track'))} tracked / {len(runs)} total, "
                   f"{time.time()-t0:.1f}s", file=sys.stderr)
 
         # ── Years ─────────────────────────────────────────────────────────────
         for yk in all_year_keys:
             is_current = (yk == cur['year'])
             dest = out / f'{yk}{suffix}.json'
-            if not is_current and dest.exists():
+            if not is_current and dest.exists() and not force:
                 print(f"\n── {yk}{suffix} … skipped (cached)", file=sys.stderr)
                 continue
-            acts = ([a for a in by_year.get(yk, []) if parse_dt(a['date']) < cur['now']]
+            runs = ([a for a in by_year.get(yk, []) if parse_dt(a['date']) < cur['now']]
                     if is_current else by_year.get(yk, []))
-            runs = ([a for a in miles_by_year.get(yk, []) if parse_dt(a['date']) < cur['now']]
-                    if is_current else miles_by_year.get(yk, []))
             print(f"\n── {yk}{suffix} …", file=sys.stderr)
             t0 = time.time()
-            data = compute_layout(acts, 'year', cw, ch, all_runs=runs)
+            data = compute_layout(runs, 'year', cw, ch)
             dest.write_text(json.dumps(data, separators=(',', ':')))
-            print(f"  {len(acts)} tracked / {len(runs)} total, "
+            print(f"  {sum(1 for a in runs if a.get('has_track'))} tracked / {len(runs)} total, "
                   f"{time.time()-t0:.1f}s", file=sys.stderr)
 
         # ── Friends (all-time) — 2.5× canvas so routes aren't microscopic ───
         print(f"\n── friends{suffix} …", file=sys.stderr)
         friends_runs = [a for a in all_runs if a.get('with_friends')]
-        friends_acts = [a for a in friends_runs if a.get('has_track')]
         fcw, fch = round(cw * 2.5), round(ch * 2.5)
         t0 = time.time()
-        data = compute_layout(friends_acts, 'year', fcw, fch, all_runs=friends_runs)
+        data = compute_layout(friends_runs, 'year', fcw, fch)
         (out / f'friends{suffix}.json').write_text(json.dumps(data, separators=(',', ':')))
-        print(f"  {len(friends_acts)} tracked / {len(friends_runs)} total, "
+        print(f"  {sum(1 for a in friends_runs if a.get('has_track'))} tracked / {len(friends_runs)} total, "
               f"canvas {fcw}×{fch}, {time.time()-t0:.1f}s", file=sys.stderr)
 
     # ── Index ─────────────────────────────────────────────────────────────────
