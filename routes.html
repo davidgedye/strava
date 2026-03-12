@@ -570,12 +570,10 @@ canvas.addEventListener('click', e => {
   const vw    = window.innerWidth;
   const avail = window.innerHeight - topH;
 
-  const rw_px    = (best.maxX - best.minX) * lastFit * userZoom;
-  const rh_px    = (best.maxY - best.minY) * lastFit * userZoom;
-  const routeLong = Math.max(rw_px, rh_px);
-  const spaceLong = Math.max(vw, avail);
+  const rw_px = (best.maxX - best.minX) * lastFit * userZoom;
+  const rh_px = (best.maxY - best.minY) * lastFit * userZoom;
 
-  if (routeLong >= 0.8 * spaceLong || userZoom >= MAX_ZOOM) {
+  if (rw_px >= 0.8 * vw || rh_px >= 0.8 * avail || userZoom >= MAX_ZOOM) {
     // Route is already full-screen → go to Strava
     location.href = 'https://www.strava.com/activities/' + best.id;
   } else {
