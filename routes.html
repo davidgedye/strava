@@ -203,7 +203,8 @@ const MONTH_NAMES = ['January','February','March','April','May','June',
                      'July','August','September','October','November','December'];
 
 function titleFor(period) {
-  if (period === 'week') return 'This Week';
+  if (period === 'week')    return 'This Week';
+  if (period === 'friends') return 'With Friends';
   if (/^\d{4}-\d{2}$/.test(period)) {
     const [y, m] = period.split('-');
     return MONTH_NAMES[parseInt(m) - 1] + ' ' + y;
@@ -220,6 +221,7 @@ function setMiles(totalMiles) {
 // ── Navigation ────────────────────────────────────────────────────────────────
 function neighborPeriods(period) {
   if (!index) return { prev: null, next: null };
+  if (period === 'friends') return { prev: null, next: null };
   if (/^\d{4}-\d{2}$/.test(period)) {
     const list = index.months;
     const i = list.indexOf(period);
@@ -257,10 +259,11 @@ canvas.addEventListener('pointerdown', e => {
 function buildDropdown() {
   dropdown.innerHTML = '';
   const items = [
-    { label: 'Today',      href: 'index.html' },
-    { label: 'This Month', period: index && index.current_month },
-    { label: 'This Year',  period: index && index.current_year },
-    { label: 'This Life',  href: 'planet.html' },
+    { label: 'Today',        href: 'index.html' },
+    { label: 'This Month',   period: index && index.current_month },
+    { label: 'This Year',    period: index && index.current_year },
+    { label: 'Lifetime',     href: 'planet.html' },
+    { label: 'With Friends', period: 'friends' },
   ];
   for (const item of items) {
     if (!item.href && !item.period) continue;  // skip if index not loaded yet
@@ -329,7 +332,9 @@ function render(data) {
   const vw  = window.innerWidth;
   const vh  = window.innerHeight;
 
-  const { w: LAYOUT_W, h: LAYOUT_H } = layoutDims();
+  const base = layoutDims();
+  const LAYOUT_W = data.canvas_w || base.w;
+  const LAYOUT_H = data.canvas_h || base.h;
   const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
   const avail = vh - topH;
   const fit = Math.min(vw / LAYOUT_W, avail / LAYOUT_H);

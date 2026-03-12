@@ -285,6 +285,8 @@ def compute_layout(activities, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H,
         'scale':       round(css_scale, 4),
         'cos_lat':     round(avg_cos, 6),
         'total_miles': round(total_miles),
+        'canvas_w':    canvas_w,
+        'canvas_h':    canvas_h,
         'activities':  out,
     }
 
@@ -386,6 +388,17 @@ def main():
             dest.write_text(json.dumps(data, separators=(',', ':')))
             print(f"  {len(acts)} tracked / {len(runs)} total, "
                   f"{time.time()-t0:.1f}s", file=sys.stderr)
+
+        # ── Friends (all-time) — 2.5× canvas so routes aren't microscopic ───
+        print(f"\n── friends{suffix} …", file=sys.stderr)
+        friends_runs = [a for a in all_runs if a.get('with_friends')]
+        friends_acts = [a for a in friends_runs if a.get('has_track')]
+        fcw, fch = round(cw * 2.5), round(ch * 2.5)
+        t0 = time.time()
+        data = compute_layout(friends_acts, 'year', fcw, fch, all_runs=friends_runs)
+        (out / f'friends{suffix}.json').write_text(json.dumps(data, separators=(',', ':')))
+        print(f"  {len(friends_acts)} tracked / {len(friends_runs)} total, "
+              f"canvas {fcw}×{fch}, {time.time()-t0:.1f}s", file=sys.stderr)
 
     # ── Index ─────────────────────────────────────────────────────────────────
     index = {

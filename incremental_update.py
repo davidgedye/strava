@@ -17,6 +17,7 @@ import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from social_classifier import is_with_friends
 
 METERS_PER_MILE = 1609.344
 MAX_TRACK_POINTS = 500
@@ -77,6 +78,16 @@ def fetch_track(activity_id, token):
         return None
 
 
+def fetch_description(activity_id, token):
+    """Fetch the full activity detail to get its description."""
+    try:
+        data = api_get(f'/activities/{activity_id}', token)
+        return data.get('description') or ''
+    except Exception as e:
+        print(f'  Warning: could not fetch description for {activity_id}: {e}')
+        return ''
+
+
 # ── PARSING ───────────────────────────────────────────────────────────────────
 
 def parse_activity(a):
@@ -111,6 +122,7 @@ def parse_activity(a):
         'calories':      round(calories) if calories else None,
         'with_pet':      None,
         'with_kid':      None,
+        'with_friends':  None,
     }
 
 
@@ -240,13 +252,16 @@ def main():
     affected_months = set()
     for a in new_activities:
         act   = parse_activity(a)
+        desc  = fetch_description(a['id'], token)
         track = fetch_track(a['id'], token)
 
         act_dir = out_dir / str(act['year']) / f"{act['month']:02d}"
         act_dir.mkdir(parents=True, exist_ok=True)
 
         act_data = activity_stub(act)
-        act_data['has_track'] = track is not None
+        act_data['description']  = desc or None
+        act_data['with_friends'] = is_with_friends(act['name'], desc)
+        act_data['has_track']    = track is not None
         if track:
             act_data['track'] = {'type': 'LineString', 'coordinates': track}
 
@@ -254,7 +269,8 @@ def main():
         with open(out_path, 'w') as f:
             json.dump(act_data, f, separators=(',', ':'))
 
-        print(f'  + {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi)')
+        social_tag = ' 👥' if act_data['with_friends'] else ''
+        print(f'  + {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi){social_tag}')
         activity_index[act['id']] = {'year': act['year'], 'month': act['month']}
         affected_months.add((act['year'], act['month']))
 

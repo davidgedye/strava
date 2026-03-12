@@ -239,6 +239,22 @@
       </div>`;
   }
 
+  function renderFriendsCard(friendsMiles, friendsCount) {
+    const commas = n => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return `
+      <a href="routes.html?period=friends" style="text-decoration:none;color:inherit;display:block" class="card-clickable">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">With Friends</span>
+          <span class="card-pct">${friendsCount} runs</span><span class="card-chevron">›</span>
+        </div>
+        <div class="delta" style="color:#e1e4e8">
+          ${commas(Math.round(friendsMiles))} <span class="label">mi run with friends</span>
+        </div>
+      </div>
+      </a>`;
+  }
+
   function renderLifetimeCard(distanceMi, goalMi) {
     const pct = Math.min((distanceMi / goalMi) * 100, 100);
     const remaining = goalMi - distanceMi;
@@ -248,7 +264,7 @@
       <a href="planet.html" style="text-decoration:none;color:inherit;display:block" class="card-clickable">
       <div class="card">
         <div class="card-header">
-          <span class="card-title">This Life</span>
+          <span class="card-title">Lifetime</span>
           <span class="card-pct">${pct.toFixed(1)}%</span><span class="card-chevron">›</span>
         </div>
         <div class="delta" style="color:#e1e4e8">
@@ -268,7 +284,8 @@
     renderCard("This Week", data.week_distance_mi, goals.weekly_mi, weekFraction, 'week') +
     renderCard("This Month", data.month_distance_mi, goals.monthly_mi, monthFraction, 'month') +
     renderCard("This Year", data.ytd_distance_mi, goals.yearly_mi, yearFraction, 'year') +
-    renderLifetimeCard(data.lifetime_distance_mi, goals.lifetime_mi);
+    renderLifetimeCard(data.lifetime_distance_mi, goals.lifetime_mi) +
+    renderFriendsCard(data.friends_miles || 0, data.friends_count || 0);
 
   // Fireworks for completed goals
   const completed = [];
