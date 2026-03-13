@@ -3,8 +3,7 @@ name: Fetch Strava Data
 
 on:
   schedule:
-    - cron: "0 20 * * *"  # noon Pacific
-    - cron: "0 2 * * *"   # 6pm Pacific
+    - cron: "0 21 * * *"  # 1pm Pacific (approx)
   workflow_dispatch:
 
 permissions:
