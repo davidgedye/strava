@@ -48,10 +48,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/strava.json data/history/ data/layouts/
           git diff --cached --quiet && echo "No changes" && exit 0
-          # Amend the previous data commit to avoid cluttering history
-          if git log -1 --format='%s' | grep -q '^Update Strava data$'; then
-            git commit --amend --no-edit
-          else
-            git commit -m "Update Strava data"
-          fi
-          git push --force-with-lease
+          git commit -m "Update Strava data"
+          git push
