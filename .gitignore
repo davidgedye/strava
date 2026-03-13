@@ -1,3 +1,4 @@
 *.zip
 *:Zone.Identifier
 __pycache__/
+data/

@@ -168,7 +168,7 @@
   try {
     [goals, data] = await Promise.all([
       fetch("goals.json").then(r => { if (!r.ok) throw new Error("goals.json not found"); return r.json(); }),
-      fetch("data/strava.json").then(r => { if (!r.ok) throw new Error("data/strava.json not found"); return r.json(); }),
+      fetch("https://pub-235ce3251fcb4a3091c119ca67daa0d9.r2.dev/data/strava.json").then(r => { if (!r.ok) throw new Error("data/strava.json not found"); return r.json(); }),
     ]);
   } catch (e) {
     content.innerHTML = '<p class="error">Failed to load data. ' + e.message + '</p>';
@@ -242,14 +242,14 @@
   function renderFriendsCard(friendsMiles, friendsCount) {
     const commas = n => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
     return `
-      <a href="routes.html?period=friends" style="text-decoration:none;color:inherit;display:block" class="card-clickable">
+      <a href="routes.html?period=social" style="text-decoration:none;color:inherit;display:block" class="card-clickable">
       <div class="card">
         <div class="card-header">
-          <span class="card-title">With Friends</span>
+          <span class="card-title">Social Runs</span>
           <span class="card-pct">${friendsCount} runs</span><span class="card-chevron">›</span>
         </div>
         <div class="delta" style="color:#e1e4e8">
-          ${commas(Math.round(friendsMiles))} <span class="label">mi run with friends</span>
+          ${commas(Math.round(friendsMiles))} <span class="label">mi run socially</span>
         </div>
       </div>
       </a>`;

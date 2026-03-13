@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   fetch:
@@ -17,6 +17,15 @@ jobs:
 
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Download data from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          mkdir -p data/history data/layouts
+          aws s3 sync s3://strava-data/data/ data/ --endpoint-url "$R2_ENDPOINT"
 
       - name: Fetch Strava data
         id: fetch
@@ -41,11 +50,10 @@ jobs:
       - name: Compute route layouts
         run: python3 compute_layout.py data/history data/layouts
 
-      - name: Commit and push if changed
+      - name: Upload data to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/strava.json data/history/ data/layouts/
-          git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "Update Strava data"
-          git push
+          aws s3 sync data/ s3://strava-data/data/ --endpoint-url "$R2_ENDPOINT"

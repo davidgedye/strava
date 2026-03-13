@@ -297,7 +297,8 @@ let runSegs, yearDivMi, monDivMi, totalRunMiles;
 
 async function main() {
   // 1 ── Year totals
-  const summary = await fetch('data/history/summary.json').then(r => r.json());
+  const DATA_BASE = 'https://pub-235ce3251fcb4a3091c119ca67daa0d9.r2.dev';
+  const summary = await fetch(DATA_BASE + '/data/history/summary.json').then(r => r.json());
   let cum = 0;
   for (const y of summary.years) { y.startMi = cum; cum += y.run_distance_mi; }
   totalRunMiles = cum;
@@ -306,7 +307,7 @@ async function main() {
   // 2 ── Month detail
   const yearIndexes = {};
   await Promise.all(summary.years.map(async y => {
-    try { yearIndexes[y.year] = await fetch(`data/history/${y.year}/index.json`).then(r => r.json()); }
+    try { yearIndexes[y.year] = await fetch(`${DATA_BASE}/data/history/${y.year}/index.json`).then(r => r.json()); }
     catch { yearIndexes[y.year] = null; }
   }));
 

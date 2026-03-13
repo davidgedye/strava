@@ -609,24 +609,24 @@ def main():
         # ── Friends (all-time) — 2.5× canvas so routes aren't microscopic ───
         friends_runs  = [a for a in all_runs if a.get('with_friends')]
         friends_count = len(friends_runs)
-        dest_friends  = out / f'friends{suffix}.json'
+        dest_social   = out / f'social{suffix}.json'
         cached_ok = False
-        if not force and dest_friends.exists():
+        if not force and dest_social.exists():
             try:
-                if json.loads(dest_friends.read_text()).get('friend_count') == friends_count:
+                if json.loads(dest_social.read_text()).get('friend_count') == friends_count:
                     cached_ok = True
             except Exception:
                 pass
         if cached_ok:
-            print(f"\n── friends{suffix} … skipped (cached, {friends_count} friend runs)",
+            print(f"\n── social{suffix} … skipped (cached, {friends_count} friend runs)",
                   file=sys.stderr)
         else:
-            print(f"\n── friends{suffix} …", file=sys.stderr)
+            print(f"\n── social{suffix} …", file=sys.stderr)
             fcw, fch = round(cw * 2.5), round(ch * 2.5)
             t0 = time.time()
             data = compute_layout(friends_runs, 'year', fcw, fch)
             data['friend_count'] = friends_count
-            dest_friends.write_text(json.dumps(data, separators=(',', ':')))
+            dest_social.write_text(json.dumps(data, separators=(',', ':')))
             print(f"  {sum(1 for a in friends_runs if a.get('has_track'))} tracked / "
                   f"{friends_count} total, canvas {fcw}×{fch}, {time.time()-t0:.1f}s",
                   file=sys.stderr)

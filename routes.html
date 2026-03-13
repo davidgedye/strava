@@ -21,6 +21,7 @@
     position: fixed;
     inset: 0;
     touch-action: none;  /* we handle all touch ourselves */
+    will-change: transform; /* promote to compositor layer for GPU pan */
   }
 
   /* Title strip — menu-spacer | prev | title | next | menu in one row */
@@ -153,13 +154,14 @@
 const LAYOUT_PORTRAIT  = { w: 393, h: 710 };
 const LAYOUT_LANDSCAPE = { w: 800, h: 400 };
 const STROKE_CSS = 1.5;  // desired stroke in CSS pixels
-const MAX_ZOOM   = 10;
+const MAX_ZOOM   = 40;
+const DATA_BASE  = 'https://pub-235ce3251fcb4a3091c119ca67daa0d9.r2.dev';
 
 function isLandscape() { return window.innerWidth > window.innerHeight; }
 function layoutDims()  { return isLandscape() ? LAYOUT_LANDSCAPE : LAYOUT_PORTRAIT; }
 function periodFile(period) {
   const suf = isLandscape() ? '-land' : '';
-  return 'data/layouts/' + encodeURIComponent(period + suf) + '.json';
+  return DATA_BASE + '/data/layouts/' + encodeURIComponent(period + suf) + '.json';
 }
 function cacheKey(period)   { return isLandscape() ? period + '-land' : period; }
 
@@ -204,7 +206,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June',
 
 function titleFor(period) {
   if (period === 'week')    return 'This Week';
-  if (period === 'friends') return 'With Friends';
+  if (period === 'social') return 'Social Runs';
   if (/^\d{4}-\d{2}$/.test(period)) {
     const [y, m] = period.split('-');
     return MONTH_NAMES[parseInt(m) - 1] + ' ' + y;
@@ -221,7 +223,7 @@ function setMiles(totalMiles) {
 // ── Navigation ────────────────────────────────────────────────────────────────
 function neighborPeriods(period) {
   if (!index) return { prev: null, next: null };
-  if (period === 'friends') return { prev: null, next: null };
+  if (period === 'social') return { prev: null, next: null };
   if (/^\d{4}-\d{2}$/.test(period)) {
     const list = index.months;
     const i = list.indexOf(period);
@@ -263,7 +265,7 @@ function buildDropdown() {
     { label: 'This Month',   period: index && index.current_month },
     { label: 'This Year',    period: index && index.current_year },
     { label: 'Lifetime',     href: 'planet.html' },
-    { label: 'With Friends', period: 'friends' },
+    { label: 'Social Runs', period: 'social' },
   ];
   for (const item of items) {
     if (!item.href && !item.period) continue;  // skip if index not loaded yet
@@ -315,6 +317,7 @@ function cancelAnim() {
 
 function animateTo(toZoom, toPanX, toPanY, duration = 350) {
   cancelAnim();
+  canvas.style.transform = '';
   const fromZoom = userZoom, fromPanX = userPanX, fromPanY = userPanY;
   const start = performance.now();
   function step(now) {
@@ -329,7 +332,7 @@ function animateTo(toZoom, toPanX, toPanY, duration = 350) {
   animFrameId = requestAnimationFrame(step);
 }
 
-function resetView() { userZoom = 1; userPanX = 0; userPanY = 0; }
+function resetView() { userZoom = 1; userPanX = 0; userPanY = 0; canvas.style.transform = ''; }
 
 // Zoom by factor k, anchored at CSS point (px, py).
 function zoomAround(k, px, py) {
@@ -485,7 +488,8 @@ canvas.addEventListener('pointermove', e => {
     if (didDrag) {
       userPanX = dragAnchor.panX + dx;
       userPanY = dragAnchor.panY + dy;
-      render(periodData);
+      // CSS translate — GPU composited, no canvas rasterization during drag
+      canvas.style.transform = `translate(${dx}px,${dy}px)`;
     }
   } else if (activePointers.size === 2 && pinchStart && pinchStart.dist0 > 0) {
     const [a, b] = [...activePointers.values()];
@@ -514,11 +518,14 @@ canvas.addEventListener('pointerup', e => {
   }
   activePointers.delete(e.pointerId);
   if (activePointers.size === 0) {
+    // Commit pan: re-render at correct position, clear CSS transform
+    if (canvas.style.transform) { canvas.style.transform = ''; render(periodData); }
     dragAnchor = null;
     pinchStart = null;
   } else if (activePointers.size === 1) {
     // Pinch → single finger: re-anchor remaining pointer so pan doesn't jump
     pinchStart = null;
+    canvas.style.transform = '';
     const [rem] = activePointers.values();
     dragAnchor = { x: rem.x, y: rem.y, panX: userPanX, panY: userPanY };
     didDrag = true;  // don't treat this as a tap
@@ -527,15 +534,19 @@ canvas.addEventListener('pointerup', e => {
 
 canvas.addEventListener('pointercancel', e => {
   activePointers.delete(e.pointerId);
-  if (activePointers.size === 0) { dragAnchor = null; pinchStart = null; }
+  if (activePointers.size === 0) { canvas.style.transform = ''; dragAnchor = null; pinchStart = null; }
 });
 
 // Scroll-wheel zoom (desktop)
+// Use exponential scaling so trackpad micro-deltas feel smooth and mouse
+// wheel coarse-deltas feel appropriately fast.  RAF-batch so multiple wheel
+// events in one frame produce exactly one render.
+let wheelRAF = null;
 canvas.addEventListener('wheel', e => {
   e.preventDefault();
-  const k = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+  const k = Math.exp(-e.deltaY * 0.004);
   zoomAround(k, e.clientX, e.clientY);
-  render(periodData);
+  if (!wheelRAF) wheelRAF = requestAnimationFrame(() => { render(periodData); wheelRAF = null; });
 }, { passive: false });
 
 // ── Click → zoom-to-fit or Strava ─────────────────────────────────────────────
@@ -621,7 +632,7 @@ function loadPeriod(period) {
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
-fetch('data/layouts/index.json')
+fetch(DATA_BASE + '/data/layouts/index.json')
   .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(data => {
     index = data;
