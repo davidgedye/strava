@@ -36,6 +36,7 @@
     border-radius: 12px;
     padding: 1.25rem 1.5rem;
     margin-bottom: 1rem;
+    transition: background 0.15s ease, border-color 0.15s ease;
   }
 
   .card-header {
@@ -64,6 +65,8 @@
     vertical-align: middle;
   }
   .card-clickable { cursor: pointer; transition: transform 0.15s ease; }
+  .card-clickable:hover .card,
+  .card.card-clickable:hover { background: #1f2231; border-color: #363a4a; }
   .card-clickable:active { transform: scale(0.98); transition: transform 0.08s ease; }
 
   .delta {
@@ -214,10 +217,10 @@
 
     const expectedPct = Math.min(fraction * 100, 100);
 
-    const href = period ? ` onclick="location.href='routes.html?period=${period}'" class="card-clickable"` : '';
+    const href = period ? ` onclick="location.href='routes.html?period=${period}'"` : '';
     const chevron = period ? '<span class="card-chevron">›</span>' : '';
     return `
-      <div class="card"${href}>
+      <div class="card${period ? ' card-clickable' : ''}"${href}>
         <div class="card-header">
           <span class="card-title">${title}</span>
           <span class="card-pct">${pct.toFixed(0)}%</span>${chevron}
