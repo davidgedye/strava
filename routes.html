@@ -214,7 +214,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June',
 
 function titleFor(period) {
   if (period === 'week')    return 'This Week';
-  if (period === 'social') return 'Social Runs';
+  if (period === 'social') return 'With Friends';
   if (/^\d{4}-\d{2}$/.test(period)) {
     const [y, m] = period.split('-');
     return MONTH_NAMES[parseInt(m) - 1] + ' ' + y;
@@ -269,11 +269,11 @@ canvas.addEventListener('pointerdown', e => {
 function buildDropdown() {
   dropdown.innerHTML = '';
   const items = [
-    { label: 'Today',        href: 'index.html' },
+    { label: 'Progress',     href: 'index.html' },
     { label: 'This Month',   period: index && index.current_month },
     { label: 'This Year',    period: index && index.current_year },
     { label: 'Lifetime',     href: 'planet.html' },
-    { label: 'Social Runs', period: 'social' },
+    { label: 'With Friends', period: 'social' },
   ];
   for (const item of items) {
     if (!item.href && !item.period) continue;  // skip if index not loaded yet
