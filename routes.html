@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Routes</title>
+<script src="https://cdn.jsdelivr.net/npm/openseadragon@4.1/build/openseadragon/openseadragon.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -16,12 +17,22 @@
     touch-action: manipulation;
   }
 
+  #osd {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    top: 0;
+    z-index: 0;
+    background: #000;
+    pointer-events: auto;
+  }
+
   canvas {
     display: block;
     position: fixed;
     inset: 0;
     touch-action: none;  /* we handle all touch ourselves */
-    will-change: transform; /* promote to compositor layer for GPU pan */
+    z-index: 2;
+    background: transparent;
   }
 
   /* Title strip — menu-spacer | prev | title | next | menu in one row */
@@ -138,6 +149,7 @@
 </head>
 <body>
 
+<div id="osd"></div>
 <canvas id="c"></canvas>
 <div id="title-strip">
   <div class="nav-btn hidden" id="btn-prev">&#8249; Prev</div>
@@ -153,7 +165,7 @@
 <script>
 const LAYOUT_PORTRAIT  = { w: 393, h: 710 };
 const LAYOUT_LANDSCAPE = { w: 800, h: 400 };
-const STROKE_CSS = 1.5;  // desired stroke in CSS pixels
+const STROKE_CSS = 1.0;  // desired stroke in CSS pixels
 
 // Brighten a hex color toward white by `amount` (0–1)
 function brightenColor(hex, amount = 0.5) {
@@ -164,12 +176,15 @@ function brightenColor(hex, amount = 0.5) {
 }
 const MAX_ZOOM   = 40;
 const DATA_BASE  = 'https://pub-235ce3251fcb4a3091c119ca67daa0d9.r2.dev';
+const DZI_BASE     = DATA_BASE + '/data/dzi';
+const LAYOUTS_BASE = DATA_BASE + '/data/layouts';
+const CANVAS_W   = 393;  // layout canvas width (portrait) — same as LAYOUT_PORTRAIT.w
 
 function isLandscape() { return window.innerWidth > window.innerHeight; }
 function layoutDims()  { return isLandscape() ? LAYOUT_LANDSCAPE : LAYOUT_PORTRAIT; }
 function periodFile(period) {
   const suf = isLandscape() ? '-land' : '';
-  return DATA_BASE + '/data/layouts/' + encodeURIComponent(period + suf) + '.json';
+  return LAYOUTS_BASE + '/' + encodeURIComponent(period + suf) + '.json';
 }
 function cacheKey(period)   { return isLandscape() ? period + '-land' : period; }
 
@@ -203,6 +218,7 @@ window.addEventListener('resize', () => {
 // ── State ─────────────────────────────────────────────────────────────────────
 let index      = null;
 let periodData = null;
+let viewer     = null;
 
 // ── URL param ─────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
@@ -358,51 +374,27 @@ let hoveredId = null;
 
 const LABEL_MIN_PX = 10;
 
-function render(data) {
-  if (!data) return;
-
-  const dpr = window.devicePixelRatio || 1;
-  const vw  = window.innerWidth;
-  const vh  = window.innerHeight;
-
-  const base = layoutDims();
-  const LAYOUT_W = data.canvas_w || base.w;
-  const LAYOUT_H = data.canvas_h || base.h;
-  const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
-  const avail = vh - topH;
-  const fit = Math.min(vw / LAYOUT_W, avail / LAYOUT_H);
-  const ox  = (vw - LAYOUT_W * fit) / 2;
-  const oy  = topH + (avail - LAYOUT_H * fit) / 2;
-  lastFit = fit; lastOx = ox; lastOy = oy;
-
-  // Clear the entire physical canvas first (covers letterbox regions too)
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.fillStyle = '#000';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  // Combined transform: fit-to-screen, then user zoom/pan
-  const totalScale = dpr * fit * userZoom;
-  const tx = (ox * userZoom + userPanX) * dpr;
-  const ty = (oy * userZoom + userPanY) * dpr;
-  ctx.setTransform(totalScale, 0, 0, totalScale, tx, ty);
-
+// Draw all routes using the already-set ctx transform.
+// pxPerLayout: screen pixels per layout unit (used for lineWidth scaling).
+function drawRoutes(data, pxPerLayout) {
   const acts   = data.activities || [];
   const scale  = data.scale   || 1000;
   const cosLat = data.cos_lat || 0.674;
 
-  // lineWidth and font size are in layout-coordinate space; divide by userZoom
-  // so strokes and labels stay at their intended CSS-pixel size when zoomed.
-  ctx.lineWidth = STROKE_CSS / (fit * userZoom);
-  ctx.lineCap   = 'round';
-  ctx.lineJoin  = 'round';
+  const base     = layoutDims();
+  const LAYOUT_W = data.canvas_w || base.w;
+  const LAYOUT_H = data.canvas_h || base.h;
+
+  ctx.lineCap  = 'round';
+  ctx.lineJoin = 'round';
 
   renderedBboxes = [];
 
   for (const act of acts) {
     const hovered = act.id === hoveredId;
-    const color = hovered ? brightenColor(act.color) : act.color;
+    const color   = hovered ? brightenColor(act.color) : act.color;
     ctx.strokeStyle = color;
-    ctx.lineWidth = (hovered ? STROKE_CSS * 2 : STROKE_CSS) / (fit * userZoom);
+    ctx.lineWidth   = (hovered ? STROKE_CSS * 2 : STROKE_CSS) / pxPerLayout;
 
     let minX, maxX, minY, maxY;
 
@@ -433,11 +425,15 @@ function render(data) {
 
     renderedBboxes.push({ id: act.id, minX, maxX, minY, maxY, dx: act.dx, dy: act.dy });
 
-    if (act.distance_mi != null && Math.min(maxX - minX, maxY - minY) * fit * userZoom >= LABEL_MIN_PX) {
-      const fontSize = 9 / (fit * userZoom);
+    if (act.distance_mi != null && Math.min(maxX - minX, maxY - minY) * pxPerLayout >= LABEL_MIN_PX) {
+      const fontSize = Math.min(24, 9 * pxPerLayout) / pxPerLayout;
       ctx.font = `500 ${fontSize}px -apple-system, sans-serif`;
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
+      ctx.strokeStyle  = 'rgba(0,0,0,0.75)';
+      ctx.lineWidth    = 3 / pxPerLayout;
+      ctx.lineJoin     = 'round';
+      ctx.strokeText(String(act.distance_mi), act.dx, act.dy);
       ctx.fillStyle    = color;
       ctx.fillText(String(act.distance_mi), act.dx, act.dy);
     }
@@ -445,14 +441,157 @@ function render(data) {
 
   if (acts.length === 0) {
     ctx.fillStyle = 'rgba(255,255,255,0.3)';
-    ctx.font = `500 ${15 / (fit * userZoom)}px -apple-system, sans-serif`;
+    ctx.font = `500 ${15 / pxPerLayout}px -apple-system, sans-serif`;
     ctx.textAlign = 'center';
     ctx.fillText('No runs recorded yet', LAYOUT_W / 2, LAYOUT_H / 2);
   }
 }
 
+function render(data) {
+  if (!data) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const vw  = window.innerWidth;
+  const vh  = window.innerHeight;
+
+  const base = layoutDims();
+  const LAYOUT_W = data.canvas_w || base.w;
+  const LAYOUT_H = data.canvas_h || base.h;
+  const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
+  const avail = vh - topH;
+  const fit = Math.min(vw / LAYOUT_W, avail / LAYOUT_H);
+  const ox  = (vw - LAYOUT_W * fit) / 2;
+  const oy  = topH + (avail - LAYOUT_H * fit) / 2;
+  lastFit = fit; lastOx = ox; lastOy = oy;
+
+  // Clear the entire physical canvas first (covers letterbox regions too)
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Combined transform: fit-to-screen, then user zoom/pan
+  const totalScale = dpr * fit * userZoom;
+  const tx = (ox * userZoom + userPanX) * dpr;
+  const ty = (oy * userZoom + userPanY) * dpr;
+  ctx.setTransform(totalScale, 0, 0, totalScale, tx, ty);
+
+  drawRoutes(data, fit * userZoom);
+}
+
+// ── OSD-driven render ─────────────────────────────────────────────────────────
+function renderFromOSD() {
+  if (!periodData || !viewer || !viewer.isOpen()) {
+    render(periodData);  // fallback to standalone canvas render
+    return;
+  }
+  const vp     = viewer.viewport;
+  const zoom   = vp.getZoom(true);
+  const center = vp.getCenter(true);  // in OSD image coords (0..1 wide, 0..aspect tall)
+
+  const container = viewer.container;
+  const cw     = container.offsetWidth;
+  const ch     = container.offsetHeight;
+  const osdTop = container.getBoundingClientRect().top;
+
+  // Pixels per layout unit: at OSD zoom=1, image fills cw px; image_width = layout canvas_w
+  const layoutW     = periodData.canvas_w || layoutDims().w;
+  const pxPerLayout = zoom * cw / layoutW;
+
+  // Layout origin on full screen
+  const tx = cw / 2 - center.x * layoutW * pxPerLayout;
+  const ty = osdTop + ch / 2 - center.y * layoutW * pxPerLayout;
+
+  const dpr = window.devicePixelRatio || 1;
+
+  // Clear canvas
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  ctx.setTransform(pxPerLayout * dpr, 0, 0, pxPerLayout * dpr, tx * dpr, ty * dpr);
+
+  drawRoutes(periodData, pxPerLayout);
+}
+
+// ── OSD mode toggle ───────────────────────────────────────────────────────────
+function setOSDMode(active) {
+  canvas.style.pointerEvents = active ? 'none' : 'auto';
+  document.getElementById('osd').style.display = active ? '' : 'none';
+}
+
+// ── OSD initialisation ────────────────────────────────────────────────────────
+function dziKey(period) { return isLandscape() ? period + '-land' : period; }
+
+function initOSD(period) {
+  const key    = dziKey(period);
+  const dziSrc = DZI_BASE + '/' + key + '/' + key + '.dzi';
+
+  // Update OSD top to match title strip
+  const topH = document.getElementById('title-strip').getBoundingClientRect().height;
+  document.getElementById('osd').style.top = topH + 'px';
+
+  if (viewer) {
+    // Already open: just navigate to new DZI
+    viewer.open(dziSrc);
+    return;
+  }
+
+  viewer = OpenSeadragon({
+    id: 'osd',
+    tileSources: dziSrc,
+    showNavigationControl: false,
+    animationTime: 0.4,
+    springStiffness: 8,
+    minZoomLevel: 0.5,
+    maxZoomPixelRatio: 1.1,
+    gestureSettingsMouse:   { clickToZoom: false, dblClickToZoom: false },
+    gestureSettingsTouch:   { clickToZoom: false, dblClickToZoom: false },
+    gestureSettingsUnknown: { clickToZoom: false, dblClickToZoom: false },
+  });
+
+  viewer.addHandler('update-viewport', () => {
+    renderFromOSD();
+  });
+
+  // Double-click / double-tap on OSD canvas → reset to home
+  viewer.addHandler('canvas-double-click', () => {
+    viewer.viewport.goHome(true);
+  });
+
+  // Single click on OSD canvas → handle route selection
+  viewer.addHandler('canvas-click', event => {
+    if (!event.quick) return;  // was a drag
+    if (dropdown.style.display === 'block') { closeDropdown(); return; }
+    // event.position is container-relative; convert to absolute screen coords
+    const osdRect = viewer.container.getBoundingClientRect();
+    handleCanvasClick(event.position.x + osdRect.left, event.position.y + osdRect.top);
+  });
+
+  // Hover (desktop) on OSD canvas — pass absolute screen coords
+  viewer.canvas.addEventListener('mousemove', e => {
+    handleHover(e.clientX, e.clientY);
+  });
+  viewer.canvas.addEventListener('mouseleave', () => {
+    if (hoveredId !== null) { hoveredId = null; renderFromOSD(); }
+  });
+}
+
 // ── Screen → layout coordinate transform ─────────────────────────────────────
 function screenToLayout(cx, cy) {
+  if (viewer && viewer.isOpen()) {
+    const vp     = viewer.viewport;
+    const zoom   = vp.getZoom(true);
+    const center = vp.getCenter(true);
+    const cw     = viewer.container.offsetWidth;
+    const ch     = viewer.container.offsetHeight;
+    const osdTop = viewer.container.getBoundingClientRect().top;
+    const layoutW = (periodData && periodData.canvas_w) || CANVAS_W;
+    const pxPerLayout = zoom * cw / layoutW;
+    return {
+      lx: (cx - cw / 2) / pxPerLayout + center.x * layoutW,
+      ly: (cy - osdTop - ch / 2) / pxPerLayout + center.y * layoutW,
+    };
+  }
+  // Fallback: original canvas-based transform
   return {
     lx: (cx - lastOx * userZoom - userPanX) / (lastFit * userZoom),
     ly: (cy - lastOy * userZoom - userPanY) / (lastFit * userZoom),
@@ -574,26 +713,37 @@ function hitTestBboxes(cx, cy) {
   return best;
 }
 
+function handleHover(cx, cy) {
+  const hit = hitTestBboxes(cx, cy);
+  const newId = hit ? hit.id : null;
+  const cursorTarget = (viewer && viewer.isOpen()) ? viewer.canvas : canvas;
+  cursorTarget.style.cursor = newId ? 'pointer' : 'default';
+  if (newId !== hoveredId) {
+    hoveredId = newId;
+    if (viewer && viewer.isOpen()) renderFromOSD();
+    else render(periodData);
+  }
+}
+
 canvas.addEventListener('mousemove', e => {
   if (activePointers.size > 0) return;  // ignore during touch/drag
-  const hit = hitTestBboxes(e.clientX, e.clientY);
-  const newId = hit ? hit.id : null;
-  canvas.style.cursor = newId ? 'pointer' : 'default';
-  if (newId !== hoveredId) { hoveredId = newId; render(periodData); }
+  handleHover(e.clientX, e.clientY);
 });
 
 canvas.addEventListener('mouseleave', () => {
   canvas.style.cursor = 'default';
-  if (hoveredId !== null) { hoveredId = null; render(periodData); }
+  if (hoveredId !== null) {
+    hoveredId = null;
+    if (viewer && viewer.isOpen()) renderFromOSD();
+    else render(periodData);
+  }
 });
 
 // ── Click → zoom-to-fit or Strava ─────────────────────────────────────────────
-canvas.addEventListener('click', e => {
-  if (dropdown.style.display === 'block') { closeDropdown(); return; }
-  if (didDrag) { didDrag = false; return; }
+function handleCanvasClick(cx, cy) {
   if (!renderedBboxes.length) return;
 
-  const { lx, ly } = screenToLayout(e.clientX, e.clientY);
+  const { lx, ly } = screenToLayout(cx, cy);
 
   // Smallest bbox containing the click
   let best = null, bestArea = Infinity;
@@ -615,6 +765,40 @@ canvas.addEventListener('click', e => {
 
   if (!best) return;
 
+  if (viewer && viewer.isOpen()) {
+    // OSD mode: use OSD viewport navigation
+    const rw = Math.max(best.maxX - best.minX, 0.001);
+    const rh = Math.max(best.maxY - best.minY, 0.001);
+    const rcx = (best.minX + best.maxX) / 2;
+    const rcy = (best.minY + best.maxY) / 2;
+
+    // Check if route is already large enough to open Strava
+    const cw = viewer.container.offsetWidth;
+    const ch = viewer.container.offsetHeight;
+    const currentZoom = viewer.viewport.getZoom(true);
+    const layoutW = (periodData && periodData.canvas_w) || CANVAS_W;
+    const pxPerLayout = currentZoom * cw / layoutW;
+    const rw_px = rw * pxPerLayout;
+    const rh_px = rh * pxPerLayout;
+
+    if (rw_px >= 0.8 * cw || rh_px >= 0.8 * ch) {
+      location.href = 'https://www.strava.com/activities/' + best.id;
+    } else {
+      // Convert target layout bbox center to OSD viewport coords
+      const rcx_vp = rcx / layoutW;
+      const rcy_vp = rcy / layoutW;  // OSD uses square aspect (divide by layoutW not layoutH)
+      // Target OSD zoom: want route bbox to fill ~80% of screen
+      const targetZoom_osd = Math.min(
+        0.8 * layoutW / rw,
+        0.8 * layoutW / (rh * cw / ch)  // account for aspect ratio
+      );
+      viewer.viewport.panTo(new OpenSeadragon.Point(rcx_vp, rcy_vp), false);
+      viewer.viewport.zoomTo(Math.max(viewer.viewport.getMinZoom(), targetZoom_osd), null, false);
+    }
+    return;
+  }
+
+  // Non-OSD (canvas-only) mode
   const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
   const vw    = window.innerWidth;
   const avail = window.innerHeight - topH;
@@ -638,6 +822,12 @@ canvas.addEventListener('click', e => {
     const toPanY = topH + avail / 2 - targetZoom * (rcy * lastFit + lastOy);
     animateTo(targetZoom, toPanX, toPanY);
   }
+}
+
+canvas.addEventListener('click', e => {
+  if (dropdown.style.display === 'block') { closeDropdown(); return; }
+  if (didDrag) { didDrag = false; return; }
+  handleCanvasClick(e.clientX, e.clientY);
 });
 
 // ── Data loading ──────────────────────────────────────────────────────────────
@@ -648,7 +838,13 @@ function loadPeriod(period) {
   const file = periodFile(period);
   if (periodCache[key]) {
     periodData = periodCache[key];
-    render(periodData);
+    const dziSrc = DZI_BASE + '/' + dziKey(period) + '/' + dziKey(period) + '.dzi';
+    fetch(dziSrc, { method: 'HEAD' })
+      .then(r => {
+        if (r.ok) { setOSDMode(true); initOSD(period); }
+        else       { setOSDMode(false); render(periodData); }
+      })
+      .catch(() => { setOSDMode(false); render(periodData); });
     return;
   }
   document.getElementById('msg').style.display = '';
@@ -661,7 +857,13 @@ function loadPeriod(period) {
       document.getElementById('msg').style.display = 'none';
       document.getElementById('title-text').textContent = titleFor(period);
       setMiles(data.total_miles);
-      render(data);
+      const dziSrc = DZI_BASE + '/' + dziKey(period) + '/' + dziKey(period) + '.dzi';
+      fetch(dziSrc, { method: 'HEAD' })
+        .then(r => {
+          if (r.ok) { setOSDMode(true); initOSD(period); }
+          else       { setOSDMode(false); render(data); }
+        })
+        .catch(() => { setOSDMode(false); render(data); });
     })
     .catch(err => {
       document.getElementById('msg').textContent = 'Could not load routes.';
@@ -670,7 +872,7 @@ function loadPeriod(period) {
 }
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
-fetch(DATA_BASE + '/data/layouts/index.json')
+fetch(LAYOUTS_BASE + '/index.json')
   .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(data => {
     index = data;
