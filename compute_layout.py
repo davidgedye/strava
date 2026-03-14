@@ -77,9 +77,10 @@ CANVAS_H = 710    # drawable area between title strip and bottom edge
 CANVAS_W_LAND = 800
 CANVAS_H_LAND = 400
 
-STROKE_CSS  = 3
-PADDING_CSS = 6
-CSS_MARGIN  = STROKE_CSS * 2 + PADDING_CSS   # 12 px per route
+STROKE_CSS  = 1.5
+PADDING_CSS = 2   # gap between routes
+OUTER_CSS   = 8   # margin at canvas edges
+CSS_MARGIN  = STROKE_CSS * 2 + PADDING_CSS   # 5 px per route
 
 MAX_PTS = {'week': 500, 'month': 250, 'year': 200}
 
@@ -241,13 +242,13 @@ def _shelf_css(routes, css_scale, cw=CANVAS_W, ch=CANVAS_H):
     # ── 1. Assign routes to rows (greedy, tallest-first) ──────────────────────
     order = sorted(range(len(routes)), key=lambda i: -routes[i]['span_lat'])
     rows = []
-    cur_row, cur_w = [], PADDING_CSS
+    cur_row, cur_w = [], OUTER_CSS
     for i in order:
         w, _ = _css_size(routes[i], css_scale)
-        if cur_row and cur_w + w > cw - PADDING_CSS:
+        if cur_row and cur_w + w > cw - OUTER_CSS:
             rows.append(cur_row)
-            cur_row, cur_w = [], PADDING_CSS
-        if cur_w + w > cw - PADDING_CSS:   # too wide even on a fresh row
+            cur_row, cur_w = [], OUTER_CSS
+        if cur_w + w > cw - OUTER_CSS:   # too wide even on a fresh row
             return
         cur_row.append(i)
         cur_w += w + PADDING_CSS
@@ -256,7 +257,7 @@ def _shelf_css(routes, css_scale, cw=CANVAS_W, ch=CANVAS_H):
 
     # ── 2. Check total height fits ─────────────────────────────────────────────
     row_h = [max(_css_size(routes[i], css_scale)[1] for i in row) for row in rows]
-    if PADDING_CSS + sum(h + PADDING_CSS for h in row_h) > ch:
+    if OUTER_CSS + sum(h + PADDING_CSS for h in row_h) + OUTER_CSS > ch:
         return
 
     # ── 3. Mountain-order items within each row (tallest centre, short ends) ───
@@ -271,7 +272,7 @@ def _shelf_css(routes, css_scale, cw=CANVAS_W, ch=CANVAS_H):
     row_widths = [sum(_css_size(routes[i], css_scale)[0] for i in row)
                   + PADDING_CSS * (len(row) - 1)
                   for row in ordered_rows]
-    y = PADDING_CSS
+    y = OUTER_CSS
     for r in row_sequence:
         x = (cw - row_widths[r]) / 2
         for i in ordered_rows[r]:
@@ -320,17 +321,17 @@ def _glacier_css(items, css_scale, cw=CANVAS_W, ch=CANVAS_H, rows_out=None):
     queue  = sorted(range(n), key=lambda i: -items[i]['span_lat'])
 
     positions = {}
-    y_cursor  = PADDING_CSS
+    y_cursor  = OUTER_CSS
 
     while queue:
         placed_before = set(positions)
 
         # ── Select items for this shelf row (greedy, tallest first) ──────────
         row_indices, leftover = [], []
-        used_w = PADDING_CSS
+        used_w = OUTER_CSS
         for i in queue:
             iw, _ = _css_size(items[i], css_scale)
-            if not row_indices or used_w + iw + PADDING_CSS <= cw - PADDING_CSS:
+            if not row_indices or used_w + iw + PADDING_CSS <= cw - OUTER_CSS:
                 row_indices.append(i)
                 used_w += iw + PADDING_CSS
             else:
@@ -340,7 +341,7 @@ def _glacier_css(items, css_scale, cw=CANVAS_W, ch=CANVAS_H, rows_out=None):
             break
 
         row_h = max(_css_size(items[i], css_scale)[1] for i in row_indices)
-        if y_cursor + row_h + PADDING_CSS > ch:
+        if y_cursor + row_h + OUTER_CSS > ch:
             break
 
         # ── Mountain-order within row, bottom-aligned ─────────────────────
@@ -407,7 +408,7 @@ def _glacier_css(items, css_scale, cw=CANVAS_W, ch=CANVAS_H, rows_out=None):
         if rows_out is not None:
             rows_out.append((y_cursor, row_h,
                              [i for i in positions if i not in placed_before]))
-        y_cursor += row_h + PADDING_CSS
+        y_cursor += row_h + PADDING_CSS  # inter-row gap
         queue = leftover
 
     if len(positions) == n:
@@ -437,7 +438,7 @@ def _shuffle_rows(positions, rows, seed=42):
     shuffled = rows[:]
     random.Random(seed).shuffle(shuffled)
     new_positions = list(positions)
-    y = PADDING_CSS
+    y = OUTER_CSS
     for old_y_top, row_h, indices in shuffled:
         for i in indices:
             old_cx, old_cy = positions[i]
