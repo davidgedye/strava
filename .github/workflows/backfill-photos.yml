@@ -1,0 +1,80 @@
+name: Backfill Photos
+# Fetches photos for all existing activities that don't have one yet,
+# then re-renders DZI tiles. Run manually after gaps in photo coverage.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rerender_all:
+        description: 'Re-render ALL DZI periods (slow ~2hrs). If false, only renders current week/month/year.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq libvips
+          pip install pyvips Pillow opencv-python-headless numpy
+
+      - name: Download data from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          mkdir -p data/history data/layouts data/photos data/dzi
+          aws s3 sync s3://strava-data/data/history/ data/history/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/photos/  data/photos/  --endpoint-url "$R2_ENDPOINT"
+
+      - name: Get Strava access token
+        id: fetch
+        env:
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+        run: bash fetch-strava.sh
+
+      - name: Update refresh token secret if rotated
+        if: steps.fetch.outputs.NEW_REFRESH_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh secret set STRAVA_REFRESH_TOKEN --body "${{ steps.fetch.outputs.NEW_REFRESH_TOKEN }}"
+
+      - name: Fetch missing photos
+        env:
+          ACCESS_TOKEN: ${{ steps.fetch.outputs.ACCESS_TOKEN }}
+        run: python3 fetch_missing_photos.py data/history data/photos
+
+      - name: Re-render DZI (current periods only)
+        if: ${{ !inputs.rerender_all }}
+        run: |
+          YEAR=$(date +%Y)
+          MONTH=$(date +%Y-%m)
+          for PERIOD in "$YEAR" "$MONTH" week; do
+            python3 render_dzi.py --period "$PERIOD" --photos-dir data/photos
+            python3 render_dzi.py --period "$PERIOD" --photos-dir data/photos --landscape
+          done
+
+      - name: Re-render DZI (all periods)
+        if: ${{ inputs.rerender_all }}
+        run: bash render_dzi_all.sh data/photos
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          aws s3 sync data/photos/ s3://strava-data/data/photos/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync data/dzi/    s3://strava-data/data/dzi/    --endpoint-url "$R2_ENDPOINT"
