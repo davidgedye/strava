@@ -88,6 +88,24 @@ def fetch_description(activity_id, token):
         return ''
 
 
+def fetch_photo(activity_id, token, photos_dir):
+    """Download the primary photo for an activity to photos_dir/{activity_id}.jpg."""
+    try:
+        photos = api_get(f'/activities/{activity_id}/photos?size=2048', token)
+        if not photos:
+            return False
+        url = photos[0].get('urls', {}).get('2048')
+        if not url:
+            return False
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            (photos_dir / f'{activity_id}.jpg').write_bytes(resp.read())
+        return True
+    except Exception as e:
+        print(f'  Warning: could not fetch photo for {activity_id}: {e}')
+        return False
+
+
 # ── PARSING ───────────────────────────────────────────────────────────────────
 
 def parse_activity(a):
@@ -249,6 +267,9 @@ def main():
         return
 
     # Write individual activity files
+    photos_dir = out_dir.parent / 'photos'
+    photos_dir.mkdir(parents=True, exist_ok=True)
+
     affected_months = set()
     for a in new_activities:
         act   = parse_activity(a)
@@ -268,6 +289,13 @@ def main():
         out_path = act_dir / f"{act['id']}.json"
         with open(out_path, 'w') as f:
             json.dump(act_data, f, separators=(',', ':'))
+
+        if a.get('total_photo_count', 0) > 0:
+            photo_out = photos_dir / f'{act["id"]}.jpg'
+            if not photo_out.exists():
+                if fetch_photo(act['id'], token, photos_dir):
+                    print(f'  → photo downloaded')
+            time.sleep(0.5)
 
         social_tag = ' 👥' if act_data['with_friends'] else ''
         print(f'  + {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi){social_tag}')

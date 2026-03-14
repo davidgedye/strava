@@ -10,12 +10,9 @@ Usage:
 """
 
 import argparse
-import csv
-import io
 import json
 import math
 import sys
-import zipfile
 from pathlib import Path
 
 import cv2
@@ -76,32 +73,14 @@ def smart_crop(pil_img, target_w, target_h):
 
 
 # ---------------------------------------------------------------------------
-# Build photo map from Strava export ZIP
+# Build photo map from photos directory
 # ---------------------------------------------------------------------------
 
-def build_photo_map(zip_path: Path) -> dict:
-    """Return {activity_id_str: [jpg_path_in_zip, ...]} from activities.csv."""
-    photo_map = {}
-    with zipfile.ZipFile(zip_path, 'r') as zf:
-        # Find activities.csv (may be at root or in a subdirectory)
-        candidates = [n for n in zf.namelist() if n.endswith('activities.csv')]
-        if not candidates:
-            print('ERROR: activities.csv not found in ZIP', file=sys.stderr)
-            return photo_map
-        csv_name = candidates[0]
-        with zf.open(csv_name) as f:
-            reader = csv.DictReader(io.TextIOWrapper(f, encoding='utf-8'))
-            for row in reader:
-                act_id = row.get('Activity ID', '').strip()
-                media  = row.get('Media', '').strip()
-                if not act_id or not media:
-                    continue
-                # Media column: pipe-separated list like "media/UUID.jpg|media/UUID.mp4"
-                parts = [p.strip() for p in media.split('|') if p.strip()]
-                jpgs  = [p for p in parts if p.lower().endswith('.jpg')]
-                if jpgs:
-                    photo_map[act_id] = jpgs
-    return photo_map
+def build_photo_map(photos_dir: Path) -> dict:
+    """Return {activity_id_str: Path} for each {activity_id}.jpg in photos_dir."""
+    if not photos_dir.exists():
+        return {}
+    return {p.stem: p for p in photos_dir.glob('*.jpg')}
 
 
 # ---------------------------------------------------------------------------
@@ -128,17 +107,17 @@ def coords_bbox(act, scale, cos_lat):
 
 def main():
     ap = argparse.ArgumentParser(description='Render DZI for a Strava layout period')
-    ap.add_argument('--period',    default='2025',                      help='Period key (default: 2025)')
-    ap.add_argument('--zip',       default='stravaExport_3_7_2026.zip', help='Strava export ZIP path')
-    ap.add_argument('--layouts',   default='data/layouts',              help='Layouts directory')
-    ap.add_argument('--output',    default='data/dzi',                  help='Output directory')
+    ap.add_argument('--period',     default='2025',         help='Period key (default: 2025)')
+    ap.add_argument('--photos-dir', default='data/photos', help='Directory of {activity_id}.jpg files')
+    ap.add_argument('--layouts',    default='data/layouts', help='Layouts directory')
+    ap.add_argument('--output',     default='data/dzi',     help='Output directory')
     ap.add_argument('--scale',     type=int, default=None,              help='Override auto-computed S')
     ap.add_argument('--max-scale', type=int, default=68,               help='Cap auto-computed S (default: 68)')
     ap.add_argument('--landscape', action='store_true',                 help='Render landscape (-land) variant')
     args = ap.parse_args()
 
     period      = args.period
-    zip_path    = Path(args.zip)
+    photos_dir  = Path(args.photos_dir)
     layouts_dir = Path(args.layouts)
     output_dir  = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -161,12 +140,9 @@ def main():
     print(f'Period: {layout_key}  |  {len(activities)} activities in layout')
 
     # Load photo map
-    if not zip_path.exists():
-        print(f'ERROR: ZIP not found: {zip_path}', file=sys.stderr)
-        sys.exit(1)
-    print(f'Reading photo map from {zip_path} ...')
-    photo_map = build_photo_map(zip_path)
-    print(f'  {len(photo_map)} activities have photos in the export')
+    print(f'Reading photo map from {photos_dir} ...')
+    photo_map = build_photo_map(photos_dir)
+    print(f'  {len(photo_map)} activities have photos')
 
     # Determine S (super-sampling scale factor)
     if args.scale is not None:
@@ -217,10 +193,6 @@ def main():
     print('Creating black background ...')
     base = pyvips.Image.black(W, H, bands=3)
 
-    # Open ZIP for photo extraction
-    zf = zipfile.ZipFile(zip_path, 'r')
-    zip_names_set = set(zf.namelist())
-
     placed = 0
     skipped = 0
 
@@ -251,22 +223,11 @@ def main():
             skipped += 1
             continue
 
-        # Select first .jpg from the media list
-        photo_path = None
-        for p in photo_map[act_id]:
-            if p.lower().endswith('.jpg') and p in zip_names_set:
-                photo_path = p
-                break
-        if photo_path is None:
-            skipped += 1
-            continue
-
         # Load photo
         try:
-            with zf.open(photo_path) as pf:
-                pil_img = Image.open(io.BytesIO(pf.read()))
-                pil_img = ImageOps.exif_transpose(pil_img)
-                pil_img = pil_img.convert('RGB')
+            pil_img = Image.open(photo_map[act_id])
+            pil_img = ImageOps.exif_transpose(pil_img)
+            pil_img = pil_img.convert('RGB')
         except Exception as exc:
             print(f'  WARN: could not load {photo_path}: {exc}')
             skipped += 1
@@ -295,8 +256,6 @@ def main():
 
         base = base.insert(vips_img, px0, py0)
         placed += 1
-
-    zf.close()
 
     print(f'[{len(activities)}/{len(activities)}] placed={placed} skipped={skipped}')
     print(f'Saving DZI to {output_dir / layout_key} ...')
