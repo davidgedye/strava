@@ -1,10 +1,14 @@
-name: Backfill Photos
-# Fetches photos for all existing activities that don't have one yet,
-# then re-renders DZI tiles. Run manually after gaps in photo coverage.
+name: Backfill Activities & Photos
+# Fetches all missing activities and photos since a given date,
+# then re-renders DZI tiles. Run manually after gaps in coverage.
 
 on:
   workflow_dispatch:
     inputs:
+      since:
+        description: 'Fetch all activities on or after this date (YYYY-MM-DD)'
+        required: true
+        default: '2026-03-07'
       rerender_all:
         description: 'Re-render ALL DZI periods (slow ~2hrs). If false, only renders current week/month/year.'
         type: boolean
@@ -51,10 +55,18 @@ jobs:
         run: |
           gh secret set STRAVA_REFRESH_TOKEN --body "${{ steps.fetch.outputs.NEW_REFRESH_TOKEN }}"
 
-      - name: Fetch missing photos
+      - name: Backfill activities and photos since given date
+        env:
+          ACCESS_TOKEN: ${{ steps.fetch.outputs.ACCESS_TOKEN }}
+        run: python3 backfill_activities.py --since "${{ inputs.since }}" --history data/history --photos data/photos
+
+      - name: Fetch photos for any remaining gaps in history
         env:
           ACCESS_TOKEN: ${{ steps.fetch.outputs.ACCESS_TOKEN }}
         run: python3 fetch_missing_photos.py data/history data/photos
+
+      - name: Recompute layouts for any newly added activities
+        run: python3 compute_layout.py data/history data/layouts
 
       - name: Re-render DZI (current periods only)
         if: ${{ !inputs.rerender_all }}
@@ -76,5 +88,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
-          aws s3 sync data/photos/ s3://strava-data/data/photos/ --endpoint-url "$R2_ENDPOINT"
-          aws s3 sync data/dzi/    s3://strava-data/data/dzi/    --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync data/history/ s3://strava-data/data/history/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync data/layouts/ s3://strava-data/data/layouts/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync data/photos/  s3://strava-data/data/photos/  --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync data/dzi/     s3://strava-data/data/dzi/     --endpoint-url "$R2_ENDPOINT"
