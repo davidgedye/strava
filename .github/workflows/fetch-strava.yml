@@ -27,7 +27,7 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
           mkdir -p data/history data/layouts data/photos data/dzi
-          aws s3 sync s3://strava-data/data/ data/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/ data/ --endpoint-url "$R2_ENDPOINT" --exclude "data/dzi/*"
 
       - name: Fetch Strava data
         id: fetch
