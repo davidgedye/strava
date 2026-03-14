@@ -176,8 +176,10 @@ function brightenColor(hex, amount = 0.5) {
 }
 const MAX_ZOOM   = 40;
 const DATA_BASE  = 'https://pub-235ce3251fcb4a3091c119ca67daa0d9.r2.dev';
-const DZI_BASE     = DATA_BASE + '/data/dzi';
-const LAYOUTS_BASE = DATA_BASE + '/data/layouts';
+const IS_DEV     = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const LOCAL_BASE = 'http://localhost:8080';
+const DZI_BASE     = IS_DEV ? LOCAL_BASE + '/data/dzi'     : DATA_BASE + '/data/dzi';
+const LAYOUTS_BASE = IS_DEV ? LOCAL_BASE + '/data/layouts' : DATA_BASE + '/data/layouts';
 const CANVAS_W   = 393;  // layout canvas width (portrait) — same as LAYOUT_PORTRAIT.w
 
 function isLandscape() { return window.innerWidth > window.innerHeight; }
