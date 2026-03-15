@@ -52,7 +52,7 @@ The `fetch-strava.yml` workflow runs at ~1 pm Pacific and does the following:
 2. **Fetch** current week/month/year summaries via `fetch-strava.sh`
 3. **Update history** — `incremental_update.py` adds JSON for any new activities and downloads their photos
 4. **Compute layouts** — `compute_layout.py` regenerates layouts for the current week/month/year (historical periods are cached)
-5. **Render DZI** — `render_dzi.py` renders Deep Zoom tiles for the current week/month/year; the social DZI is only re-rendered if the friend count changed
+5. **Render DZI** — `render_dzi.py` smart-crops each activity photo to the aspect ratio of its route's bounding box (prioritising faces where detected), then renders Deep Zoom tiles for the current week/month/year; the social DZI is only re-rendered if the friend count changed
 6. **Upload** everything back to R2
 
 OAuth refresh tokens are rotated automatically: if Strava issues a new refresh token, the workflow updates the `STRAVA_REFRESH_TOKEN` GitHub secret via a fine-grained PAT.
@@ -154,7 +154,7 @@ Inputs:
 | `fetch-strava.sh` | Fetches week/month/year mileage totals from Strava API |
 | `incremental_update.py` | Adds per-activity history JSON and downloads activity photos |
 | `compute_layout.py` | Pre-computes glacier-packed route layouts for all periods |
-| `render_dzi.py` | Renders Deep Zoom Image tiles from activity photos for a given period |
+| `render_dzi.py` | Smart-crops activity photos to each route's bounding box aspect ratio (faces prioritised), then renders Deep Zoom Image tiles for a given period |
 | `render_dzi_all.sh` | Batch-renders DZI for every period (portrait + landscape) |
 | `backfill_activities.py` | Fetches missing activities and photos since a given date |
 | `extract_photos.py` | One-time: extracts photos from a Strava data export ZIP |
