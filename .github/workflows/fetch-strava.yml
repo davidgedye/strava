@@ -20,7 +20,7 @@ jobs:
           sudo apt-get update && sudo apt-get install -y jq libvips
           pip install pyvips Pillow opencv-python-headless numpy
 
-      - name: Download data from R2
+      - name: Download processed Strava data from R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -31,7 +31,7 @@ jobs:
           aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
           aws s3 sync s3://strava-data/data/photos/  data/photos/  --endpoint-url "$R2_ENDPOINT"
 
-      - name: Fetch Strava data
+      - name: Fetch fresh Strava data
         id: fetch
         env:
           STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
