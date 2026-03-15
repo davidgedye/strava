@@ -60,11 +60,6 @@ jobs:
           ACCESS_TOKEN: ${{ steps.fetch.outputs.ACCESS_TOKEN }}
         run: python3 backfill_activities.py --since "${{ inputs.since }}" --history data/history --photos data/photos
 
-      - name: Fetch photos for any remaining gaps in history
-        env:
-          ACCESS_TOKEN: ${{ steps.fetch.outputs.ACCESS_TOKEN }}
-        run: python3 fetch_missing_photos.py data/history data/photos
-
       - name: Recompute layouts for any newly added activities
         run: python3 compute_layout.py data/history data/layouts
 
