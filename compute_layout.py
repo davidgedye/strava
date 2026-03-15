@@ -433,7 +433,7 @@ def _max_glacier_scale(items, cw=CANVAS_W, ch=CANVAS_H):
     return lo
 
 
-def _shuffle_rows(positions, rows, seed=42):
+def _shuffle_rows(positions, rows, seed):
     """Shuffle row order, preserving each item's position relative to its row top."""
     shuffled = rows[:]
     random.Random(seed).shuffle(shuffled)
@@ -447,7 +447,7 @@ def _shuffle_rows(positions, rows, seed=42):
     return new_positions
 
 
-def glacier_positions(items, css_scale, cw=CANVAS_W, ch=CANVAS_H):
+def glacier_positions(items, css_scale, cw=CANVAS_W, ch=CANVAS_H, seed=42):
     """Pack items with glacier algorithm and shuffle row order. Returns position list."""
     rows = []
     result = [None] * len(items)
@@ -457,13 +457,13 @@ def glacier_positions(items, css_scale, cw=CANVAS_W, ch=CANVAS_H):
         if v is None:
             result[i] = (cw / 2, ch / 2)
     if rows:
-        result = _shuffle_rows(result, rows)
+        result = _shuffle_rows(result, rows, seed)
     return result
 
 
 # ── Period layout ──────────────────────────────────────────────────────────────
 
-def compute_layout(runs, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H):
+def compute_layout(runs, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H, seed=42):
     """
     runs : all runs in period (tracked + untracked)
     kind : 'week' | 'month' | 'year'  (controls point-count simplification)
@@ -487,7 +487,7 @@ def compute_layout(runs, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H):
         item['color'] = route_color(rank, n)
 
     css_scale = _max_glacier_scale(items, canvas_w, canvas_h)
-    positions = glacier_positions(items, css_scale, canvas_w, canvas_h)
+    positions = glacier_positions(items, css_scale, canvas_w, canvas_h, seed=seed)
 
     avg_cos = sum(r['cos_lat'] for r in items) / n
     out = []
@@ -570,7 +570,7 @@ def main():
         week_runs = [a for a in all_runs
                      if cur['week_start'] <= parse_dt(a['date']) < cur['now']]
         t0 = time.time()
-        data = compute_layout(week_runs, 'week', cw, ch)
+        data = compute_layout(week_runs, 'week', cw, ch, seed='week')
         (out / f'week{suffix}.json').write_text(json.dumps(data, separators=(',', ':')))
         print(f"  {sum(1 for a in week_runs if a.get('has_track'))} tracked / {len(week_runs)} total, "
               f"{time.time()-t0:.1f}s", file=sys.stderr)
@@ -586,7 +586,7 @@ def main():
                     if is_current else by_month.get(mk, []))
             print(f"\n── {mk}{suffix} …", file=sys.stderr)
             t0 = time.time()
-            data = compute_layout(runs, 'month', cw, ch)
+            data = compute_layout(runs, 'month', cw, ch, seed=mk)
             dest.write_text(json.dumps(data, separators=(',', ':')))
             print(f"  {sum(1 for a in runs if a.get('has_track'))} tracked / {len(runs)} total, "
                   f"{time.time()-t0:.1f}s", file=sys.stderr)
@@ -602,7 +602,7 @@ def main():
                     if is_current else by_year.get(yk, []))
             print(f"\n── {yk}{suffix} …", file=sys.stderr)
             t0 = time.time()
-            data = compute_layout(runs, 'year', cw, ch)
+            data = compute_layout(runs, 'year', cw, ch, seed=yk)
             dest.write_text(json.dumps(data, separators=(',', ':')))
             print(f"  {sum(1 for a in runs if a.get('has_track'))} tracked / {len(runs)} total, "
                   f"{time.time()-t0:.1f}s", file=sys.stderr)
@@ -625,7 +625,7 @@ def main():
             print(f"\n── social{suffix} …", file=sys.stderr)
             fcw, fch = round(cw * 2.5), round(ch * 2.5)
             t0 = time.time()
-            data = compute_layout(friends_runs, 'year', fcw, fch)
+            data = compute_layout(friends_runs, 'year', fcw, fch, seed='social')
             data['friend_count'] = friends_count
             dest_social.write_text(json.dumps(data, separators=(',', ':')))
             print(f"  {sum(1 for a in friends_runs if a.get('has_track'))} tracked / "

@@ -48,8 +48,11 @@ def api_get(path, token):
 def simplify(coords, max_points=MAX_TRACK_POINTS):
     if len(coords) <= max_points:
         return coords
-    step = len(coords) / max_points
-    return [coords[int(i * step)] for i in range(max_points)]
+    step = (len(coords) - 1) / (max_points - 1)
+    indices = set(round(i * step) for i in range(max_points))
+    indices.add(0)
+    indices.add(len(coords) - 1)
+    return [coords[i] for i in sorted(indices)]
 
 
 def fetch_track(activity_id, token):
