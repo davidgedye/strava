@@ -108,12 +108,12 @@ To create the PAT: **GitHub → Settings → Developer settings → Personal acc
 
 ### 6. Goals
 
-Edit `goals.json`:
+Edit `goals.json` to whatever your weekly, monthly and yearly goals are, e.g.
 
 ```json
 {
   "weekly_mi": 20,
-  "monthly_mi": 80,
+  "monthly_mi": 85,
   "yearly_mi": 1000
 }
 ```
