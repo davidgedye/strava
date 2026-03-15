@@ -1,67 +1,114 @@
-# Strava Running Goals Dashboard
+# Strava Running Dashboard
 
-A static dashboard that tracks progress against yearly and monthly running distance goals using data from the Strava API. Hosted on GitHub Pages with no backend — a daily GitHub Action fetches your data and commits it as static JSON.
+A personal running dashboard with three views, hosted on GitHub Pages. A daily GitHub Action pulls data from the Strava API, processes it, and uploads everything to Cloudflare R2. The HTML/JS is served from GitHub Pages; all data is fetched from R2 at runtime. There is no backend.
+
+## Pages
+
+| Page | URL | Description |
+|---|---|---|
+| **Progress** | `index.html` | Weekly / monthly / yearly distance vs. goals, with fireworks on completion |
+| **Routes** | `routes.html` | Full-screen canvas of GPS route outlines, packed glacier-style, with a Deep Zoom photo background |
+| **Lifetime** | `planet.html` | Cumulative lifetime distance visualisation |
+
+`routes.html` accepts a `?period=` query parameter:
+- `week` — current rolling week
+- `YYYY-MM` — a specific month
+- `YYYY` — a full year
+- `social` — runs inferred to have been done with other people
+
+The routes page auto-detects portrait vs landscape and loads the appropriate layout.
+
+## Architecture
+
+```
+GitHub Actions (daily)
+  └─ fetch-strava.sh        ← Strava API → summary JSON (week/month/year totals)
+  └─ incremental_update.py  ← Strava API → per-activity history JSON + photos
+  └─ compute_layout.py      ← history/ + layouts/ → glacier-packed route layouts
+  └─ render_dzi.py          ← photos/ → Deep Zoom Image tiles
+  └─ aws s3 sync → Cloudflare R2 (strava-data bucket)
+
+GitHub Pages
+  └─ index.html / routes.html / planet.html
+       └─ fetch data at runtime from R2 public URL
+```
+
+All data lives in Cloudflare R2 under `data/`:
+
+| Path | Contents |
+|---|---|
+| `data/history/{id}.json` | Per-activity JSON (GPS track, distance, photos, etc.) |
+| `data/layouts/{period}.json` | Pre-computed route layout for a period |
+| `data/photos/{id}.jpg` | Activity photos |
+| `data/dzi/{period}/` | Deep Zoom Image tiles for photo background |
+
+The git repo contains only code — no data files are committed.
+
+## Daily Workflow
+
+The `fetch-strava.yml` workflow runs at ~1 pm Pacific and does the following:
+
+1. **Download** `history/`, `layouts/`, and `photos/` from R2
+2. **Fetch** current week/month/year summaries via `fetch-strava.sh`
+3. **Update history** — `incremental_update.py` adds JSON for any new activities and downloads their photos
+4. **Compute layouts** — `compute_layout.py` regenerates layouts for the current week/month/year (historical periods are cached)
+5. **Render DZI** — `render_dzi.py` renders Deep Zoom tiles for the current week/month/year; the social DZI is only re-rendered if the friend count changed
+6. **Upload** everything back to R2
+
+OAuth refresh tokens are rotated automatically: if Strava issues a new refresh token, the workflow updates the `STRAVA_REFRESH_TOKEN` GitHub secret via a fine-grained PAT.
 
 ## Setup
 
-### 1. Create a Strava API Application
+### 1. Strava API application
 
-1. Go to https://www.strava.com/settings/api
-2. Create an application (use any website/callback URL, e.g., `http://localhost`)
-3. Note your **Client ID** and **Client Secret**
+1. Go to `https://www.strava.com/settings/api` and create an app (any callback URL, e.g. `http://localhost`)
+2. Note your **Client ID** and **Client Secret**
 
-### 2. Get Your Initial Refresh Token
+### 2. Initial refresh token (one-time)
 
-Authorize your app to access your data (one-time manual step):
+```bash
+# 1. Open in browser — replace YOUR_CLIENT_ID:
+https://www.strava.com/oauth/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=http://localhost&scope=read,activity:read&approval_prompt=force
 
-1. Open this URL in your browser (replace `YOUR_CLIENT_ID`):
+# 2. After authorising, copy the `code` from the redirect URL, then:
+curl -X POST https://www.strava.com/oauth/token \
+  -d client_id=YOUR_CLIENT_ID \
+  -d client_secret=YOUR_CLIENT_SECRET \
+  -d code=AUTHORIZATION_CODE \
+  -d grant_type=authorization_code
+# Save the refresh_token from the response
+```
 
-   ```
-   https://www.strava.com/oauth/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=http://localhost&scope=read,activity:read&approval_prompt=force
-   ```
+### 3. Cloudflare R2
 
-2. Authorize the app. You'll be redirected to `http://localhost?code=AUTHORIZATION_CODE&...`
-3. Copy the `code` parameter from the URL
-4. Exchange it for tokens:
+1. Create a bucket named `strava-data`
+2. Enable public access and note the public URL
+3. Configure CORS to allow your GitHub Pages origin (`https://<user>.github.io`) plus `http://localhost:8080`; include both `GET` and `HEAD` methods
+4. Create an R2 API token with read/write access and note the endpoint URL
 
-   ```bash
-   curl -X POST https://www.strava.com/oauth/token \
-     -d client_id=YOUR_CLIENT_ID \
-     -d client_secret=YOUR_CLIENT_SECRET \
-     -d code=AUTHORIZATION_CODE \
-     -d grant_type=authorization_code
-   ```
+### 4. GitHub secrets
 
-5. Save the `refresh_token` from the response
-
-### 3. Configure GitHub Repository Secrets
-
-In your repo, go to **Settings → Secrets and variables → Actions** and add:
+In **Settings → Secrets and variables → Actions**, add:
 
 | Secret | Value |
 |---|---|
-| `STRAVA_CLIENT_ID` | Your Strava app Client ID |
-| `STRAVA_CLIENT_SECRET` | Your Strava app Client Secret |
-| `STRAVA_REFRESH_TOKEN` | The refresh token from step 2 |
+| `STRAVA_CLIENT_ID` | Strava app Client ID |
+| `STRAVA_CLIENT_SECRET` | Strava app Client Secret |
+| `STRAVA_REFRESH_TOKEN` | Refresh token from step 2 |
+| `R2_ACCESS_KEY_ID` | R2 API token key ID |
+| `R2_SECRET_ACCESS_KEY` | R2 API token secret |
+| `R2_ENDPOINT` | R2 endpoint URL |
+| `GH_PAT` | Fine-grained PAT with **Secrets: read/write** on this repo (enables automatic refresh token rotation) |
 
-**Recommended**: Add a `GH_PAT` secret to enable automatic refresh token rotation. Without this, if Strava rotates your refresh token, the workflow will break and require manual re-authorization.
+To create the PAT: **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**. Set repository access to this repo only, and grant **Secrets: Read and write**.
 
-To create the token:
-1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
-2. Set **Repository access** to "Only select repositories" and pick this repo
-3. Under **Repository permissions**, set **Secrets** to **Read and write**
-4. Set expiration to "No expiration" for a fully hands-off setup
-5. Add the token as a `GH_PAT` repository secret
+### 5. GitHub Pages
 
-### 4. Enable GitHub Pages
+**Settings → Pages → Source: Deploy from a branch → master / (root)**
 
-Go to **Settings → Pages** and set:
-- Source: **Deploy from a branch**
-- Branch: **main**, folder: **/ (root)**
+### 6. Goals
 
-### 5. Set Your Goals
-
-Edit `goals.json` to set your targets:
+Edit `goals.json`:
 
 ```json
 {
@@ -71,29 +118,43 @@ Edit `goals.json` to set your targets:
 }
 ```
 
-### 6. Run
+### 7. First run
 
-- Trigger the action manually: **Actions → Fetch Strava Data → Run workflow**
-- After that it runs automatically twice daily (6am and 6pm Pacific)
-- Your dashboard will be available at `https://<username>.github.io/<repo>/`
+Trigger the workflow manually: **Actions → Fetch Strava Data → Run workflow**. After that it runs automatically once daily.
 
-## Local Testing
+Your dashboard will be at `https://<username>.github.io/<repo>/`.
+
+## Local Development
+
+The HTML pages detect `localhost` and fetch data from `http://localhost:8080` instead of R2. Serve a local data directory on that port:
 
 ```bash
-export STRAVA_CLIENT_ID=your_id
-export STRAVA_CLIENT_SECRET=your_secret
-export STRAVA_REFRESH_TOKEN=your_token
-bash fetch-strava.sh
+# In a directory containing a data/ folder synced from R2:
+python3 -m http.server 8080
 ```
 
-Then open `index.html` in a browser (e.g., `python3 -m http.server` and visit `http://localhost:8000`).
+Then open `index.html` or `routes.html` in a browser (via any other local server, e.g. port 8000).
 
-## Files
+You do not need the `data/dzi/` directory locally — the routes page falls back to a plain canvas if no Deep Zoom tiles are found.
 
-| File | Purpose |
+## Backfill
+
+If there are gaps in history (e.g. the workflow wasn't running for a period), use the **Backfill Activities & Photos** workflow:
+
+**Actions → Backfill Activities & Photos → Run workflow**
+
+Inputs:
+- `since` — fetch all activities on or after this date (`YYYY-MM-DD`)
+- `rerender_all` — re-render DZI for every historical period (slow, ~2 hours); leave unchecked to only re-render current week/month/year
+
+## Key Scripts
+
+| Script | Purpose |
 |---|---|
-| `index.html` | Dashboard (static HTML/CSS/JS) |
-| `goals.json` | Your distance targets |
-| `data/strava.json` | Fetched Strava data (auto-generated) |
-| `fetch-strava.sh` | Script that calls the Strava API |
-| `.github/workflows/fetch-strava.yml` | Daily cron job |
+| `fetch-strava.sh` | Fetches week/month/year mileage totals from Strava API |
+| `incremental_update.py` | Adds per-activity history JSON and downloads activity photos |
+| `compute_layout.py` | Pre-computes glacier-packed route layouts for all periods |
+| `render_dzi.py` | Renders Deep Zoom Image tiles from activity photos for a given period |
+| `render_dzi_all.sh` | Batch-renders DZI for every period (portrait + landscape) |
+| `backfill_activities.py` | Fetches missing activities and photos since a given date |
+| `extract_photos.py` | One-time: extracts photos from a Strava data export ZIP |
