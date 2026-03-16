@@ -587,6 +587,10 @@ function initOSD(period) {
     pressStart = { x: e.clientX, y: e.clientY };
     if (pressedId) renderFromOSD();
   });
+  viewer.canvas.addEventListener('pointerup', e => {
+    if (!e.isPrimary) return;
+    if (pressedId) { pressedId = null; renderFromOSD(); }
+  });
   viewer.canvas.addEventListener('pointermove', e => {
     if (pressedId && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 4) {
       pressedId  = null;
@@ -697,6 +701,8 @@ canvas.addEventListener('pointermove', e => {
 });
 
 canvas.addEventListener('pointerup', e => {
+  // Clear press highlight
+  if (pressedId) { pressedId = null; render(periodData); }
   // Double-tap → reset view (only for single-finger taps)
   if (activePointers.size === 1 && !didDrag) {
     const now = Date.now();
