@@ -117,6 +117,14 @@ if [[ -f data/friends_stats.json ]]; then
   FRIENDS_COUNT=$(jq '.friends_count' data/friends_stats.json)
 fi
 
+# Read hikes stats from layout (synced from R2 at start of workflow)
+HIKES_MILES=0
+HIKES_COUNT=0
+if [[ -f data/layouts/hikes.json ]]; then
+  HIKES_MILES=$(python3 -c "import json; print(json.load(open('data/layouts/hikes.json')).get('total_miles', 0))")
+  HIKES_COUNT=$(python3 -c "import json; print(json.load(open('data/layouts/hikes.json')).get('hike_count', 0))")
+fi
+
 jq -n \
   --arg updated_at "$UPDATED_AT" \
   --argjson ytd_distance_mi "$YTD_DISTANCE_MI" \
@@ -125,6 +133,8 @@ jq -n \
   --argjson lifetime_distance_mi "$LIFETIME_DISTANCE_MI" \
   --argjson friends_miles "$FRIENDS_MILES" \
   --argjson friends_count "$FRIENDS_COUNT" \
+  --argjson hikes_miles "$HIKES_MILES" \
+  --argjson hikes_count "$HIKES_COUNT" \
   --arg current_month "$CURRENT_MONTH_STR" \
   --argjson current_year "$CURRENT_YEAR" \
   '{
@@ -135,6 +145,8 @@ jq -n \
     lifetime_distance_mi: $lifetime_distance_mi,
     friends_miles: $friends_miles,
     friends_count: $friends_count,
+    hikes_miles: $hikes_miles,
+    hikes_count: $hikes_count,
     current_month: $current_month,
     current_year: ($current_year | tonumber)
   }' > data/strava.json

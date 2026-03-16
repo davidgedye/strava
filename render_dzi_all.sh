@@ -7,12 +7,13 @@ set -euo pipefail
 PHOTOS_DIR="${1:-data/photos}"
 LAYOUTS_DIR="data/layouts"
 
-# Discover all non-social, non-week portrait layout files
+# Discover all non-social, non-hikes, non-week portrait layout files
 mapfile -t PERIODS < <(
   ls "$LAYOUTS_DIR"/*.json \
   | xargs -I{} basename {} .json \
   | grep -v '\-land$' \
   | grep -v '^social$' \
+  | grep -v '^hikes$' \
   | grep -v '^week$' \
   | grep -v '^index$' \
   | sort
@@ -39,6 +40,15 @@ for period in "${PERIODS[@]}"; do
   python3 render_dzi.py --period "$period" --photos-dir "$PHOTOS_DIR" --landscape
   echo "  ✓ $period landscape done"
 done
+
+echo ""
+echo "══════════════════════════════════════════"
+echo "  Hikes (portrait + landscape)"
+echo "══════════════════════════════════════════"
+python3 render_dzi.py --period hikes --photos-dir "$PHOTOS_DIR" --scale 20
+echo "  ✓ hikes portrait done"
+python3 render_dzi.py --period hikes --photos-dir "$PHOTOS_DIR" --scale 15 --landscape
+echo "  ✓ hikes landscape done"
 
 echo ""
 echo "All done. DZI files written to data/dzi/"

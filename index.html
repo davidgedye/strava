@@ -285,12 +285,29 @@
       </a>`;
   }
 
+  function renderHikesCard(hikesMiles, hikesCount) {
+    const commas = n => n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+    return `
+      <a href="routes.html?period=hikes" style="text-decoration:none;color:inherit;display:block" class="card-clickable">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Hikes</span>
+          <span class="card-pct">${hikesCount} hikes</span><span class="card-chevron">›</span>
+        </div>
+        <div class="delta" style="color:#e1e4e8">
+          ${commas(Math.round(hikesMiles))} <span class="label">mi hiked</span>
+        </div>
+      </div>
+      </a>`;
+  }
+
   content.innerHTML =
     renderCard("This Week", data.week_distance_mi, goals.weekly_mi, weekFraction, 'week') +
     renderCard("This Month", data.month_distance_mi, goals.monthly_mi, monthFraction, 'month') +
     renderCard("This Year", data.ytd_distance_mi, goals.yearly_mi, yearFraction, 'year') +
     renderLifetimeCard(data.lifetime_distance_mi, goals.lifetime_mi) +
-    renderFriendsCard(data.friends_miles || 0, data.friends_count || 0);
+    renderFriendsCard(data.friends_miles || 0, data.friends_count || 0) +
+    renderHikesCard(data.hikes_miles || 0, data.hikes_count || 0);
 
   // Fireworks for completed goals
   const completed = [];

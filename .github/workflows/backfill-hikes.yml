@@ -1,0 +1,97 @@
+name: Backfill Hikes
+# One-time workflow: fetch any hike/walk/snowshoe activities since the ZIP
+# export date via the Strava API, then compute layouts and render DZI.
+# Assumes hike history and photos have already been uploaded to R2 from
+# the local ZIP extraction step.
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Fetch all activities on or after this date (YYYY-MM-DD)'
+        required: true
+        default: '2026-03-07'
+
+permissions:
+  contents: read
+
+jobs:
+  backfill-hikes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq libvips
+          pip install pyvips Pillow opencv-python-headless numpy
+
+      - name: Download data from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          mkdir -p data/history data/layouts data/photos data/dzi
+          aws s3 sync s3://strava-data/data/history/ data/history/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/photos/  data/photos/  --endpoint-url "$R2_ENDPOINT"
+
+      - name: Get Strava access token
+        id: fetch
+        env:
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+        run: |
+          RESPONSE=$(curl -sf -X POST https://www.strava.com/oauth/token \
+            -d "client_id=${STRAVA_CLIENT_ID}" \
+            -d "client_secret=${STRAVA_CLIENT_SECRET}" \
+            -d "grant_type=refresh_token" \
+            -d "refresh_token=${STRAVA_REFRESH_TOKEN}")
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token')
+          NEW_REFRESH_TOKEN=$(echo "$RESPONSE" | jq -r '.refresh_token')
+          if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
+            echo "Error: failed to get access token" >&2; exit 1
+          fi
+          echo "ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$GITHUB_OUTPUT"
+          if [[ "$NEW_REFRESH_TOKEN" != "$STRAVA_REFRESH_TOKEN" && "$NEW_REFRESH_TOKEN" != "null" ]]; then
+            echo "NEW_REFRESH_TOKEN=${NEW_REFRESH_TOKEN}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update refresh token secret if rotated
+        if: steps.fetch.outputs.NEW_REFRESH_TOKEN
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh secret set STRAVA_REFRESH_TOKEN --body "${{ steps.fetch.outputs.NEW_REFRESH_TOKEN }}"
+
+      - name: Backfill API gap + re-fetch corrected activities
+        env:
+          ACCESS_TOKEN: ${{ steps.fetch.outputs.ACCESS_TOKEN }}
+        run: |
+          python3 backfill_activities.py \
+            --since "${{ inputs.since }}" \
+            --force-ids "14242831135,720499791" \
+            --history data/history \
+            --photos data/photos
+
+      - name: Compute hikes layout
+        run: python3 compute_layout.py data/history data/layouts
+
+      - name: Render hikes DZI (portrait + landscape)
+        run: |
+          python3 render_dzi.py --period hikes --photos-dir data/photos --scale 20
+          python3 render_dzi.py --period hikes --photos-dir data/photos --scale 15 --landscape
+
+      - name: Upload to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          aws s3 sync data/history/ s3://strava-data/data/history/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync data/layouts/ s3://strava-data/data/layouts/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync data/photos/  s3://strava-data/data/photos/  --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync data/dzi/     s3://strava-data/data/dzi/     --endpoint-url "$R2_ENDPOINT"

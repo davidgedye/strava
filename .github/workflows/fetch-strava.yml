@@ -75,6 +75,19 @@ jobs:
           else
             echo "friend_count unchanged — skipping social DZI render"
           fi
+
+          # Re-render hikes DZI only if hike_count changed
+          NEW_HC=$(python3 -c "import json; print(json.load(open('data/layouts/hikes.json')).get('hike_count', 0))" 2>/dev/null || echo 0)
+          OLD_HC=$(aws s3 cp s3://strava-data/data/layouts/hikes.json - --endpoint-url "$R2_ENDPOINT" 2>/dev/null \
+                   | python3 -c "import json,sys; print(json.load(sys.stdin).get('hike_count', -1))" 2>/dev/null || echo -1)
+          echo "Hikes hike_count: old=$OLD_HC new=$NEW_HC"
+          if [[ "$NEW_HC" != "$OLD_HC" ]]; then
+            echo "hike_count changed — re-rendering hikes DZI"
+            python3 render_dzi.py --period hikes --photos-dir data/photos --scale 20
+            python3 render_dzi.py --period hikes --photos-dir data/photos --scale 15 --landscape
+          else
+            echo "hike_count unchanged — skipping hikes DZI render"
+          fi
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

@@ -235,6 +235,7 @@ const MONTH_NAMES = ['January','February','March','April','May','June',
 function titleFor(period) {
   if (period === 'week')    return 'This Week';
   if (period === 'social') return 'Runs with Friends';
+  if (period === 'hikes')  return 'Hikes';
   if (/^\d{4}-\d{2}$/.test(period)) {
     const [y, m] = period.split('-');
     return MONTH_NAMES[parseInt(m) - 1] + ' ' + y + ' runs';
@@ -252,6 +253,7 @@ function setMiles(totalMiles) {
 function neighborPeriods(period) {
   if (!index) return { prev: null, next: null };
   if (period === 'social') return { prev: null, next: null };
+  if (period === 'hikes')  return { prev: null, next: null };
   if (/^\d{4}-\d{2}$/.test(period)) {
     const list = index.months;
     const i = list.indexOf(period);
@@ -294,6 +296,7 @@ function buildDropdown() {
     { label: 'This Year',    period: index && index.current_year },
     { label: 'Lifetime',     href: 'planet.html' },
     { label: 'With Friends', period: 'social' },
+    { label: 'Hikes',        period: 'hikes' },
   ];
   for (const item of items) {
     if (!item.href && !item.period) continue;  // skip if index not loaded yet
@@ -416,8 +419,9 @@ function drawRoutes(data, pxPerLayout) {
       minX = Infinity; maxX = -Infinity; minY = Infinity; maxY = -Infinity;
       ctx.beginPath();
       let first = true;
+      const actCosLat = act.cos_lat || cosLat;
       for (const [dlng, dlat] of pts) {
-        const x = act.dx + dlng * scale * cosLat;
+        const x = act.dx + dlng * scale * actCosLat;
         const y = act.dy - dlat * scale;
         if (x < minX) minX = x; if (x > maxX) maxX = x;
         if (y < minY) minY = y; if (y > maxY) maxY = y;
