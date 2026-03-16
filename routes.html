@@ -328,6 +328,7 @@ function updateNav() {
 
 function navigate(period) {
   closeDropdown();
+  lastZoomedId = null;
   currentPeriod = period;
   history.replaceState(null, '', '?period=' + encodeURIComponent(period));
   const cached = periodCache[cacheKey(period)];
@@ -340,6 +341,7 @@ function navigate(period) {
 
 // ── Zoom / pan state ──────────────────────────────────────────────────────────
 let userZoom = 1, userPanX = 0, userPanY = 0;
+let lastZoomedId = null;  // activity zoomed into on last click; next click on same activity navigates
 let animFrameId = null;
 
 function cancelAnim() {
@@ -780,19 +782,16 @@ function handleCanvasClick(cx, cy) {
     const rcx = (best.minX + best.maxX) / 2;
     const rcy = (best.minY + best.maxY) / 2;
 
-    // Check if route is already large enough to open Strava.
-    // Use getZoom(false) = destination zoom, not getZoom(true) = current
-    // animated value. Without this, clicking during an animation re-triggers
-    // the zoom-in branch (to the same target) rather than opening Strava.
     const cw = viewer.container.offsetWidth;
     const ch = viewer.container.offsetHeight;
-    const currentZoom = viewer.viewport.getZoom(false);
     const layoutW = (periodData && periodData.canvas_w) || CANVAS_W;
-    const pxPerLayout = currentZoom * cw / layoutW;
-    const rw_px = rw * pxPerLayout;
-    const rh_px = rh * pxPerLayout;
 
-    if (rw_px >= 0.8 * cw || rh_px >= 0.8 * ch) {
+    // Navigate to Strava if this activity was already zoomed into on the
+    // previous click, regardless of current zoom level. This handles both
+    // mid-animation clicks and edge cases where OSD's achieved zoom falls
+    // just short of the 80% threshold.
+    if (best.id === lastZoomedId) {
+      lastZoomedId = null;
       location.href = 'https://www.strava.com/activities/' + best.id;
     } else {
       // Convert target layout bbox center to OSD viewport coords
@@ -803,6 +802,7 @@ function handleCanvasClick(cx, cy) {
         0.8 * layoutW / rw,
         0.8 * layoutW / (rh * cw / ch)  // account for aspect ratio
       );
+      lastZoomedId = best.id;
       viewer.viewport.panTo(new OpenSeadragon.Point(rcx_vp, rcy_vp), false);
       viewer.viewport.zoomTo(Math.max(viewer.viewport.getMinZoom(), targetZoom_osd), null, false);
     }
@@ -814,11 +814,8 @@ function handleCanvasClick(cx, cy) {
   const vw    = window.innerWidth;
   const avail = window.innerHeight - topH;
 
-  const rw_px = (best.maxX - best.minX) * lastFit * userZoom;
-  const rh_px = (best.maxY - best.minY) * lastFit * userZoom;
-
-  if (rw_px >= 0.8 * vw || rh_px >= 0.8 * avail || userZoom >= MAX_ZOOM) {
-    // Route is already full-screen → go to Strava
+  if (best.id === lastZoomedId) {
+    lastZoomedId = null;
     location.href = 'https://www.strava.com/activities/' + best.id;
   } else {
     // Zoom to fill ~80% of available space, centred on the route
@@ -831,6 +828,7 @@ function handleCanvasClick(cx, cy) {
     const rcy = (best.minY + best.maxY) / 2;
     const toPanX = vw / 2           - targetZoom * (rcx * lastFit + lastOx);
     const toPanY = topH + avail / 2 - targetZoom * (rcy * lastFit + lastOy);
+    lastZoomedId = best.id;
     animateTo(targetZoom, toPanX, toPanY);
   }
 }
