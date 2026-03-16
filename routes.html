@@ -379,7 +379,9 @@ function zoomAround(k, px, py) {
 // ── Render ────────────────────────────────────────────────────────────────────
 let lastFit = 1, lastOx = 0, lastOy = 0;
 let renderedBboxes = [];   // [{id, minX, maxX, minY, maxY, dx, dy}] layout coords
-let hoveredId = null;
+let hoveredId  = null;
+let pressedId  = null;   // activity finger/mouse is currently pressing
+let pressStart = null;   // {x,y} at pointerdown, to detect drag before clearing pressedId
 
 const LABEL_MIN_PX = 10;
 
@@ -400,10 +402,11 @@ function drawRoutes(data, pxPerLayout) {
   renderedBboxes = [];
 
   for (const act of acts) {
+    const pressed = act.id === pressedId;
     const hovered = act.id === hoveredId;
-    const color   = hovered ? brightenColor(act.color) : act.color;
+    const color   = pressed ? '#ffffff' : (hovered ? brightenColor(act.color) : act.color);
     ctx.strokeStyle = color;
-    ctx.lineWidth   = (hovered ? STROKE_CSS * 2 : STROKE_CSS) / pxPerLayout;
+    ctx.lineWidth   = (pressed || hovered ? STROKE_CSS * 2 : STROKE_CSS) / pxPerLayout;
 
     let minX, maxX, minY, maxY;
 
@@ -576,6 +579,22 @@ function initOSD(period) {
     handleCanvasClick(event.position.x + osdRect.left, event.position.y + osdRect.top);
   });
 
+  // Press highlight on OSD canvas (touch + mouse)
+  viewer.canvas.addEventListener('pointerdown', e => {
+    if (!e.isPrimary) return;
+    const hit = hitTestBboxes(e.clientX, e.clientY);
+    pressedId  = hit ? hit.id : null;
+    pressStart = { x: e.clientX, y: e.clientY };
+    if (pressedId) renderFromOSD();
+  });
+  viewer.canvas.addEventListener('pointermove', e => {
+    if (pressedId && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 4) {
+      pressedId  = null;
+      pressStart = null;
+      renderFromOSD();
+    }
+  });
+
   // Hover (desktop) on OSD canvas — pass absolute screen coords
   viewer.canvas.addEventListener('mousemove', e => {
     handleHover(e.clientX, e.clientY);
@@ -624,6 +643,10 @@ canvas.addEventListener('pointerdown', e => {
     dragAnchor = { x: e.clientX, y: e.clientY, panX: userPanX, panY: userPanY };
     didDrag = false;
     pinchStart = null;
+    const hit = hitTestBboxes(e.clientX, e.clientY);
+    pressedId  = hit ? hit.id : null;
+    pressStart = { x: e.clientX, y: e.clientY };
+    if (pressedId) render(periodData);
   } else if (activePointers.size === 2) {
     const [a, b] = [...activePointers.values()];
     pinchStart = {
@@ -645,7 +668,10 @@ canvas.addEventListener('pointermove', e => {
   if (activePointers.size === 1 && dragAnchor) {
     const dx = e.clientX - dragAnchor.x;
     const dy = e.clientY - dragAnchor.y;
-    if (!didDrag && Math.hypot(dx, dy) > 4) didDrag = true;
+    if (!didDrag && Math.hypot(dx, dy) > 4) {
+      didDrag = true;
+      if (pressedId) { pressedId = null; render(periodData); }
+    }
     if (didDrag) {
       userPanX = dragAnchor.panX + dx;
       userPanY = dragAnchor.panY + dy;
