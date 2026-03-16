@@ -780,10 +780,13 @@ function handleCanvasClick(cx, cy) {
     const rcx = (best.minX + best.maxX) / 2;
     const rcy = (best.minY + best.maxY) / 2;
 
-    // Check if route is already large enough to open Strava
+    // Check if route is already large enough to open Strava.
+    // Use getZoom(false) = destination zoom, not getZoom(true) = current
+    // animated value. Without this, clicking during an animation re-triggers
+    // the zoom-in branch (to the same target) rather than opening Strava.
     const cw = viewer.container.offsetWidth;
     const ch = viewer.container.offsetHeight;
-    const currentZoom = viewer.viewport.getZoom(true);
+    const currentZoom = viewer.viewport.getZoom(false);
     const layoutW = (periodData && periodData.canvas_w) || CANVAS_W;
     const pxPerLayout = currentZoom * cw / layoutW;
     const rw_px = rw * pxPerLayout;
