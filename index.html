@@ -182,6 +182,23 @@
 
   const now = new Date();
 
+  // If strava.json is from a previous ISO week or month, those totals are stale.
+  // Reset them to 0 so a new period starts clean before the daily workflow runs.
+  if (data.updated_at) {
+    const upd = new Date(data.updated_at);
+    // ISO week start (Monday 00:00 local) for a given date
+    const weekStart = d => {
+      const r = new Date(d);
+      r.setHours(0, 0, 0, 0);
+      r.setDate(r.getDate() - ((r.getDay() + 6) % 7)); // back to Monday
+      return r;
+    };
+    if (weekStart(upd) < weekStart(now)) data.week_distance_mi = 0;
+    if (upd.getFullYear() !== now.getFullYear() || upd.getMonth() !== now.getMonth()) {
+      data.month_distance_mi = 0;
+    }
+  }
+
   // Weekly fraction (Monday = day 1, Sunday = day 7)
   const jsDay = now.getDay(); // 0=Sun, 1=Mon, ...
   const dayOfWeek = jsDay === 0 ? 7 : jsDay; // 1=Mon, 7=Sun
