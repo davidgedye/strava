@@ -404,9 +404,9 @@ function drawRoutes(data, pxPerLayout) {
   for (const act of acts) {
     const pressed = act.id === pressedId;
     const hovered = act.id === hoveredId;
-    const color   = pressed ? '#ffffff' : (hovered ? brightenColor(act.color) : act.color);
+    const color   = (pressed || hovered) ? '#ffffff' : act.color;
     ctx.strokeStyle = color;
-    ctx.lineWidth   = (pressed || hovered ? STROKE_CSS * 2 : STROKE_CSS) / pxPerLayout;
+    ctx.lineWidth   = (pressed ? STROKE_CSS * 5 : hovered ? STROKE_CSS * 2 : STROKE_CSS) / pxPerLayout;
 
     let minX, maxX, minY, maxY;
 
