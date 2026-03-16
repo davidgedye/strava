@@ -165,6 +165,19 @@
 </div>
 
 <script>
+// Reload when restored from bfcache (iOS PWA "resume") or when the tab
+// becomes visible again after being hidden for more than 10 minutes.
+// This ensures new Date() always reflects the current day.
+let hiddenAt = null;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    hiddenAt = Date.now();
+  } else if (hiddenAt !== null && Date.now() - hiddenAt > 10 * 60 * 1000) {
+    location.reload();
+  }
+});
+window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); });
+
 (async function() {
   const content = document.getElementById("content");
   const updatedEl = document.getElementById("updated");
