@@ -15,7 +15,6 @@ import math
 import sys
 from pathlib import Path
 
-import cv2
 import numpy as np
 import pyvips
 from PIL import Image, ImageOps
@@ -24,6 +23,47 @@ from PIL import Image, ImageOps
 # ---------------------------------------------------------------------------
 # Smart crop (face-aware)
 # ---------------------------------------------------------------------------
+
+def detect_faces(pil_img):
+    """Return (anchor_x, anchor_y) centred on detected faces, or None."""
+    np_rgb = np.array(pil_img.convert('RGB'))
+
+    # Try mediapipe first — handles sunglasses, hats, non-frontal angles
+    try:
+        import mediapipe as mp
+        detector = mp.solutions.face_detection.FaceDetection(
+            model_selection=1, min_detection_confidence=0.4)
+        result = detector.process(np_rgb)
+        detector.close()
+        if result.detections:
+            h, w = np_rgb.shape[:2]
+            xs, ys = [], []
+            for det in result.detections:
+                bb = det.location_data.relative_bounding_box
+                xs += [bb.xmin * w, (bb.xmin + bb.width)  * w]
+                ys += [bb.ymin * h, (bb.ymin + bb.height) * h]
+            return int((min(xs) + max(xs)) / 2), int((min(ys) + max(ys)) / 2)
+    except Exception:
+        pass
+
+    # Fallback: OpenCV Haar cascade
+    try:
+        import cv2
+        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        cascade = cv2.CascadeClassifier(cascade_path)
+        gray  = cv2.cvtColor(np_rgb, cv2.COLOR_RGB2GRAY)
+        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(20, 20))
+        if len(faces) > 0:
+            fx  = int(faces[:, 0].min())
+            fy  = int(faces[:, 1].min())
+            fx2 = int((faces[:, 0] + faces[:, 2]).max())
+            fy2 = int((faces[:, 1] + faces[:, 3]).max())
+            return (fx + fx2) // 2, (fy + fy2) // 2
+    except Exception:
+        pass
+
+    return None
+
 
 def smart_crop(pil_img, target_w, target_h):
     """Crop pil_img to target_w:target_h aspect ratio, centering on detected faces.
@@ -47,23 +87,9 @@ def smart_crop(pil_img, target_w, target_h):
     anchor_x = src_w // 2
     anchor_y = src_h // 2
 
-    # Face detection
-    try:
-        cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
-        cascade = cv2.CascadeClassifier(cascade_path)
-        np_rgb = np.array(pil_img.convert('RGB'))
-        gray   = cv2.cvtColor(np_rgb, cv2.COLOR_RGB2GRAY)
-        faces  = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(20, 20))
-        if len(faces) > 0:
-            # Union bbox of all faces
-            fx  = int(faces[:, 0].min())
-            fy  = int(faces[:, 1].min())
-            fx2 = int((faces[:, 0] + faces[:, 2]).max())
-            fy2 = int((faces[:, 1] + faces[:, 3]).max())
-            anchor_x = (fx + fx2) // 2
-            anchor_y = (fy + fy2) // 2
-    except Exception:
-        pass  # fall back to center crop
+    face_anchor = detect_faces(pil_img)
+    if face_anchor:
+        anchor_x, anchor_y = face_anchor
 
     # Compute top-left of crop box, clamped to image bounds
     left = max(0, min(anchor_x - crop_w // 2, src_w - crop_w))
