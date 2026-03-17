@@ -207,7 +207,7 @@ def main():
 
     W = canvas_w * S
     H = canvas_h * S
-    tile_size = 510
+    tile_size = 512
     # Rough tile count estimate (DZI pyramid)
     est_tiles = sum(
         math.ceil(W / (2**lv) / tile_size) * math.ceil(H / (2**lv) / tile_size)
@@ -297,7 +297,7 @@ def main():
 
     base.dzsave(
         str(period_out / layout_key),
-        tile_size=510,
+        tile_size=512,
         overlap=1,
         layout='dz',
         suffix='.jpg[Q=85]',
