@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Render DZI super-images for all periods (years + months), both portrait and landscape.
-# Social is excluded — run separately with a lower --scale if needed.
+# Render DZI super-images for all periods (years + months, social, hikes), both portrait and landscape.
 # Usage: bash render_dzi_all.sh [data/photos]
 set -euo pipefail
 
@@ -49,6 +48,15 @@ python3 render_dzi.py --period hikes --photos-dir "$PHOTOS_DIR" --scale 20
 echo "  ✓ hikes portrait done"
 python3 render_dzi.py --period hikes --photos-dir "$PHOTOS_DIR" --scale 15 --landscape
 echo "  ✓ hikes landscape done"
+
+echo ""
+echo "══════════════════════════════════════════"
+echo "  Social (portrait + landscape)"
+echo "══════════════════════════════════════════"
+python3 render_dzi.py --period social --photos-dir "$PHOTOS_DIR" --scale 20
+echo "  ✓ social portrait done"
+python3 render_dzi.py --period social --photos-dir "$PHOTOS_DIR" --scale 15 --landscape
+echo "  ✓ social landscape done"
 
 echo ""
 echo "All done. DZI files written to data/dzi/"

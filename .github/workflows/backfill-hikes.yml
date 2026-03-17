@@ -94,6 +94,9 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
+          aws configure set default.s3.max_concurrent_requests 50
+          aws configure set default.s3.multipart_threshold 8MB
+          aws configure set default.s3.max_queue_size 10000
           aws s3 sync data/history/ s3://strava-data/data/history/ --endpoint-url "$R2_ENDPOINT"
           aws s3 sync data/layouts/ s3://strava-data/data/layouts/ --endpoint-url "$R2_ENDPOINT"
           aws s3 sync data/photos/  s3://strava-data/data/photos/  --endpoint-url "$R2_ENDPOINT"
