@@ -109,12 +109,12 @@ CURRENT_MONTH_STR="${CURRENT_YEAR}-${CURRENT_MONTH}"
 
 mkdir -p data
 
-# Read friends stats if available (written by classify_social.py)
+# Read friends stats from layout (synced from R2 at start of workflow)
 FRIENDS_MILES=0
 FRIENDS_COUNT=0
-if [[ -f data/friends_stats.json ]]; then
-  FRIENDS_MILES=$(jq '.friends_miles' data/friends_stats.json)
-  FRIENDS_COUNT=$(jq '.friends_count' data/friends_stats.json)
+if [[ -f data/layouts/social.json ]]; then
+  FRIENDS_MILES=$(python3 -c "import json; print(json.load(open('data/layouts/social.json')).get('total_miles', 0))")
+  FRIENDS_COUNT=$(python3 -c "import json; print(json.load(open('data/layouts/social.json')).get('friend_count', 0))")
 fi
 
 # Read hikes stats from layout (synced from R2 at start of workflow)

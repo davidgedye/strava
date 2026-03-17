@@ -78,7 +78,10 @@ jobs:
             --photos data/photos
 
       - name: Compute hikes layout
-        run: python3 compute_layout.py data/history data/layouts
+        run: |
+          # Delete cached layouts so compute_layout.py always recomputes from history
+          rm -f data/layouts/hikes.json data/layouts/hikes-land.json
+          python3 compute_layout.py data/history data/layouts
 
       - name: Render hikes DZI (portrait + landscape)
         run: |
