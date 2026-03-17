@@ -138,6 +138,19 @@
     margin-top: 1.5rem;
   }
 
+  .card-row {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+  }
+  .card-row > * { flex: 1; min-width: 0; }
+  .card-row .card {
+    margin-bottom: 0;
+    padding: 1rem 1.1rem;
+    height: 100%;
+  }
+  .card-row .delta { font-size: 1.7rem; }
+
   .error {
     text-align: center;
     color: #f87171;
@@ -336,8 +349,10 @@ window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); }
     renderCard("This Month", data.month_distance_mi, goals.monthly_mi, monthFraction, 'month') +
     renderCard("This Year", data.ytd_distance_mi, goals.yearly_mi, yearFraction, 'year') +
     renderLifetimeCard(data.lifetime_distance_mi, goals.lifetime_mi) +
-    renderFriendsCard(data.friends_miles || 0, data.friends_count || 0) +
-    renderHikesCard(data.hikes_miles || 0, data.hikes_count || 0);
+    `<div class="card-row">` +
+      renderFriendsCard(data.friends_miles || 0, data.friends_count || 0) +
+      renderHikesCard(data.hikes_miles || 0, data.hikes_count || 0) +
+    `</div>`;
 
   // Fireworks for completed goals
   const completed = [];
