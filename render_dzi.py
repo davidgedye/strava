@@ -185,7 +185,7 @@ def main():
                 continue  # skip circles for this calculation
             if not act.get('coords'):
                 continue
-            bbox = coords_bbox(act, scale, cos_lat)
+            bbox = coords_bbox(act, scale, act.get('cos_lat', cos_lat))
             if bbox is None:
                 continue
             min_x, min_y, max_x, max_y = bbox
@@ -231,8 +231,8 @@ def main():
             skipped += 1
             continue
 
-        # Compute CSS bbox
-        bbox = coords_bbox(act, scale, cos_lat)
+        # Compute CSS bbox — use per-activity cos_lat if stored (hikes span wide lat range)
+        bbox = coords_bbox(act, scale, act.get('cos_lat', cos_lat))
         if bbox is None:
             skipped += 1
             continue
