@@ -1,0 +1,54 @@
+name: DZI Upload Speed Test
+# Renders and uploads a single year period to measure throughput.
+# Used to extrapolate full re-render upload time with new S3 concurrency settings.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq libvips
+          pip install pyvips Pillow opencv-python-headless numpy mediapipe
+
+      - name: Download layouts and photos from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          mkdir -p data/layouts data/photos data/dzi
+          aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/photos/  data/photos/  --endpoint-url "$R2_ENDPOINT"
+
+      - name: Render 2025 portrait + landscape
+        run: |
+          python3 render_dzi.py --period 2025 --photos-dir data/photos
+          python3 render_dzi.py --period 2025 --photos-dir data/photos --landscape
+
+      - name: Count tiles
+        run: |
+          echo "Tile count:"
+          find data/dzi/2025 -type f | wc -l
+          echo "Total size:"
+          du -sh data/dzi/2025
+
+      - name: Upload 2025 DZI to R2 (timed)
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          aws configure set default.s3.max_concurrent_requests 50
+          aws configure set default.s3.multipart_threshold 8MB
+          aws configure set default.s3.max_queue_size 10000
+          time aws s3 sync data/dzi/2025/ s3://strava-data/data/dzi/2025/ --endpoint-url "$R2_ENDPOINT"
