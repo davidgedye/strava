@@ -1,0 +1,52 @@
+name: Re-render All DZI
+# Re-renders DZI tiles for every period (years, months, week, social, hikes)
+# using the current render_dzi.py. Run this after changing crop/rendering logic.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rerender:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq libvips
+          pip install pyvips Pillow opencv-python-headless numpy mediapipe
+
+      - name: Download layouts and photos from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          mkdir -p data/layouts data/photos data/dzi
+          aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/photos/  data/photos/  --endpoint-url "$R2_ENDPOINT"
+
+      - name: Render all DZI (years + months + hikes, portrait + landscape)
+        run: bash render_dzi_all.sh data/photos
+
+      - name: Render social DZI (portrait + landscape)
+        run: |
+          python3 render_dzi.py --period social --photos-dir data/photos --scale 20
+          python3 render_dzi.py --period social --photos-dir data/photos --scale 15 --landscape
+
+      - name: Render current week DZI (portrait + landscape)
+        run: |
+          python3 render_dzi.py --period week --photos-dir data/photos
+          python3 render_dzi.py --period week --photos-dir data/photos --landscape
+
+      - name: Upload DZI to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          aws s3 sync data/dzi/ s3://strava-data/data/dzi/ --endpoint-url "$R2_ENDPOINT"
