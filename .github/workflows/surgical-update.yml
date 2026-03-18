@@ -1,0 +1,176 @@
+name: Surgical Update
+# Recomputes only the layouts and DZI periods affected by changes to specific activities.
+# Use this instead of a full re-render when you know which activities changed.
+#
+# change_type:
+#   photo  — photo added or replaced (DZI only, no layout recompute)
+#   route  — GPS track edited (layout + DZI for affected month/year/week)
+#   social — with_friends flag toggled (social layout + DZI only)
+#   type   — activity type changed, e.g. Run→Hike (layout + DZI for old and new periods)
+#
+# For change_type=type, also supply previous_types: a parallel comma-separated list
+# of the activity type BEFORE the change (e.g. "Run,Trail Run").
+
+on:
+  workflow_dispatch:
+    inputs:
+      activity_ids:
+        description: 'Comma-separated Strava activity IDs'
+        required: true
+      change_type:
+        description: 'Type of change: photo | route | social | type'
+        required: true
+        default: 'photo'
+      previous_types:
+        description: 'Previous activity types (required for change_type=type, parallel to activity_ids)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y jq libvips
+          pip install pyvips Pillow opencv-python-headless numpy mediapipe
+
+      - name: Download history, layouts, and photos from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          mkdir -p data/history data/layouts data/photos
+          aws s3 sync s3://strava-data/data/history/ data/history/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
+          aws s3 sync s3://strava-data/data/photos/  data/photos/  --endpoint-url "$R2_ENDPOINT"
+
+      - name: Determine affected periods
+        run: |
+          PREV_TYPES_ARG=""
+          if [[ -n "${{ inputs.previous_types }}" ]]; then
+            PREV_TYPES_ARG="--previous-types ${{ inputs.previous_types }}"
+          fi
+          python3 affected_periods.py \
+            --ids "${{ inputs.activity_ids }}" \
+            --change-type "${{ inputs.change_type }}" \
+            --history data/history \
+            $PREV_TYPES_ARG \
+            | tee /tmp/affected_manifest.json
+          echo "Layout periods: $(python3 -c "import json; print(json.load(open('/tmp/affected_manifest.json'))['layout_periods'])")"
+          echo "DZI periods:    $(python3 -c "import json; print(json.load(open('/tmp/affected_manifest.json'))['dzi_periods'])")"
+
+      - name: Recompute affected layouts
+        if: inputs.change_type != 'photo'
+        run: |
+          LAYOUT_PERIODS=$(python3 -c "
+          import json
+          m = json.load(open('/tmp/affected_manifest.json'))
+          print(','.join(m['layout_periods']))
+          ")
+          if [[ -z "$LAYOUT_PERIODS" ]]; then
+            echo "No layout periods to recompute."
+          else
+            echo "Force-recomputing: $LAYOUT_PERIODS"
+            python3 compute_layout.py data/history data/layouts --force-periods="$LAYOUT_PERIODS"
+          fi
+
+      - name: Re-render DZI for affected periods
+        run: |
+          python3 - <<'PYEOF'
+          import json, subprocess, sys
+
+          with open('/tmp/affected_manifest.json') as f:
+              manifest = json.load(f)
+
+          dzi_periods = manifest['dzi_periods']
+          if not dzi_periods:
+              print("No DZI periods to render.")
+              sys.exit(0)
+
+          FIXED_SCALE = {'social': (20, 15), 'hikes': (20, 15)}
+
+          for period in dzi_periods:
+              portrait_scale, landscape_scale = FIXED_SCALE.get(period, (None, None))
+
+              portrait_args  = ['--scale', str(portrait_scale)]  if portrait_scale  else []
+              landscape_args = ['--scale', str(landscape_scale)] if landscape_scale else []
+
+              print(f"\nRendering {period} (portrait)...")
+              subprocess.run(
+                  ['python3', 'render_dzi.py', '--period', period,
+                   '--photos-dir', 'data/photos'] + portrait_args,
+                  check=True)
+
+              print(f"Rendering {period} (landscape)...")
+              subprocess.run(
+                  ['python3', 'render_dzi.py', '--period', period,
+                   '--photos-dir', 'data/photos', '--landscape'] + landscape_args,
+                  check=True)
+          PYEOF
+
+      - name: Upload affected data to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          aws configure set default.s3.max_concurrent_requests 50
+          aws configure set default.s3.multipart_threshold 8MB
+          aws configure set default.s3.max_queue_size 10000
+
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+
+          R2_ENDPOINT = os.environ['R2_ENDPOINT']
+          S3_BASE     = 's3://strava-data'
+
+          def s3_cp(src, dst):
+              subprocess.run(
+                  ['aws', 's3', 'cp', src, dst, '--endpoint-url', R2_ENDPOINT],
+                  check=True)
+
+          def s3_sync(src, dst):
+              subprocess.run(
+                  ['aws', 's3', 'sync', src, dst, '--delete',
+                   '--endpoint-url', R2_ENDPOINT],
+                  check=True)
+
+          with open('/tmp/affected_manifest.json') as f:
+              manifest = json.load(f)
+
+          change_type    = '${{ inputs.change_type }}'
+          layout_periods = manifest['layout_periods']
+          dzi_periods    = manifest['dzi_periods']
+
+          # Upload recomputed layout files (portrait + landscape)
+          if change_type != 'photo':
+              for p in layout_periods:
+                  for suffix in ('', '-land'):
+                      key   = f'{p}{suffix}'
+                      local = f'data/layouts/{key}.json'
+                      if os.path.exists(local):
+                          print(f'Uploading layout: {key}.json')
+                          s3_cp(local, f'{S3_BASE}/data/layouts/{key}.json')
+              # index.json is always rewritten by compute_layout.py
+              if os.path.exists('data/layouts/index.json'):
+                  s3_cp('data/layouts/index.json', f'{S3_BASE}/data/layouts/index.json')
+
+          # Upload re-rendered DZI directories (portrait + landscape)
+          for p in dzi_periods:
+              for suffix in ('', '-land'):
+                  key       = f'{p}{suffix}'
+                  local_dir = f'data/dzi/{key}'
+                  if os.path.exists(local_dir):
+                      print(f'Uploading DZI: {key}/')
+                      s3_sync(local_dir + '/', f'{S3_BASE}/data/dzi/{key}/')
+
+          print('Upload complete.')
+          PYEOF

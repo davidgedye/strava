@@ -558,6 +558,8 @@ def compute_layout(runs, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H, seed=42):
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
     force = '--force' in sys.argv
+    _fp_raw = next((a.split('=', 1)[1] for a in sys.argv if a.startswith('--force-periods=')), None)
+    force_periods = set(_fp_raw.split(',')) if _fp_raw else set()
     history_dir = args[0] if len(args) > 0 else 'data/history'
     output_dir  = args[1] if len(args) > 1 else 'data/layouts'
 
@@ -613,7 +615,7 @@ def main():
         for mk in all_month_keys:
             is_current = (mk == cur['month'])
             dest = out / f'{mk}{suffix}.json'
-            if not is_current and dest.exists() and not force:
+            if not is_current and dest.exists() and not force and mk not in force_periods:
                 print(f"\n── {mk}{suffix} … skipped (cached)", file=sys.stderr)
                 continue
             runs = ([a for a in by_month.get(mk, []) if parse_dt(a['date']) < cur['now']]
@@ -629,7 +631,7 @@ def main():
         for yk in all_year_keys:
             is_current = (yk == cur['year'])
             dest = out / f'{yk}{suffix}.json'
-            if not is_current and dest.exists() and not force:
+            if not is_current and dest.exists() and not force and yk not in force_periods:
                 print(f"\n── {yk}{suffix} … skipped (cached)", file=sys.stderr)
                 continue
             runs = ([a for a in by_year.get(yk, []) if parse_dt(a['date']) < cur['now']]
@@ -646,7 +648,7 @@ def main():
         friends_count = len(friends_runs)
         dest_social   = out / f'social{suffix}.json'
         cached_ok = False
-        if not force and dest_social.exists():
+        if not force and 'social' not in force_periods and dest_social.exists():
             try:
                 if json.loads(dest_social.read_text()).get('friend_count') == friends_count:
                     cached_ok = True
@@ -671,7 +673,7 @@ def main():
         hike_count  = len(hike_acts)
         dest_hikes  = out / f'hikes{suffix}.json'
         cached_ok = False
-        if not force and dest_hikes.exists():
+        if not force and 'hikes' not in force_periods and dest_hikes.exists():
             try:
                 if json.loads(dest_hikes.read_text()).get('hike_count') == hike_count:
                     cached_ok = True
