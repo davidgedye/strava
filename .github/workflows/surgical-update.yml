@@ -41,16 +41,41 @@ jobs:
           sudo apt-get update && sudo apt-get install -y jq libvips
           pip install pyvips Pillow opencv-python-headless numpy mediapipe
 
-      - name: Download history, layouts, and photos from R2
+      - name: Download layouts from R2
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
           mkdir -p data/history data/layouts data/photos
-          aws s3 sync s3://strava-data/data/history/ data/history/ --endpoint-url "$R2_ENDPOINT"
           aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
-          aws s3 sync s3://strava-data/data/photos/  data/photos/  --endpoint-url "$R2_ENDPOINT"
+
+      - name: Download history from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          if [[ "${{ inputs.change_type }}" == "photo" ]]; then
+            # Only need the specific activity files — find them by searching history
+            echo "Photo change: downloading only the affected activity history files..."
+            for ID in $(echo "${{ inputs.activity_ids }}" | tr ',' ' '); do
+              FILE_PATH=$(aws s3 ls s3://strava-data/data/history/ --recursive \
+                --endpoint-url "$R2_ENDPOINT" | grep "/${ID}\.json$" | awk '{print $NF}')
+              if [[ -n "$FILE_PATH" ]]; then
+                mkdir -p "data/$(dirname $FILE_PATH)"
+                aws s3 cp "s3://strava-data/$FILE_PATH" "data/$FILE_PATH" \
+                  --endpoint-url "$R2_ENDPOINT"
+                echo "  Downloaded: $FILE_PATH"
+              else
+                echo "  WARNING: history file not found for activity $ID"
+              fi
+            done
+          else
+            # route/social/type changes need all history for compute_layout.py
+            echo "Downloading all history..."
+            aws s3 sync s3://strava-data/data/history/ data/history/ --endpoint-url "$R2_ENDPOINT"
+          fi
 
       - name: Determine affected periods
         run: |
@@ -66,6 +91,51 @@ jobs:
             | tee /tmp/affected_manifest.json
           echo "Layout periods: $(python3 -c "import json; print(json.load(open('/tmp/affected_manifest.json'))['layout_periods'])")"
           echo "DZI periods:    $(python3 -c "import json; print(json.load(open('/tmp/affected_manifest.json'))['dzi_periods'])")"
+
+      - name: Download photos for affected periods
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+          from concurrent.futures import ThreadPoolExecutor
+
+          R2_ENDPOINT = os.environ['R2_ENDPOINT']
+
+          with open('/tmp/affected_manifest.json') as f:
+              manifest = json.load(f)
+
+          # Collect activity IDs from all affected period layout JSONs (portrait only —
+          # portrait and landscape have identical activity lists)
+          photo_ids = set()
+          for period in manifest['dzi_periods']:
+              layout_file = f'data/layouts/{period}.json'
+              if os.path.exists(layout_file):
+                  layout = json.load(open(layout_file))
+                  for act in layout.get('activities', []):
+                      photo_ids.add(str(act['id']))
+
+          print(f"Downloading up to {len(photo_ids)} photos for affected periods...")
+
+          def download_photo(photo_id):
+              result = subprocess.run(
+                  ['aws', 's3', 'cp',
+                   f's3://strava-data/data/photos/{photo_id}.jpg',
+                   f'data/photos/{photo_id}.jpg',
+                   '--endpoint-url', R2_ENDPOINT],
+                  capture_output=True)
+              if result.returncode != 0:
+                  pass  # no photo for this activity — normal
+
+          with ThreadPoolExecutor(max_workers=20) as pool:
+              pool.map(download_photo, photo_ids)
+
+          downloaded = sum(1 for pid in photo_ids
+                           if os.path.exists(f'data/photos/{pid}.jpg'))
+          print(f"Downloaded {downloaded}/{len(photo_ids)} photos.")
+          PYEOF
 
       - name: Recompute affected layouts
         if: inputs.change_type != 'photo'
