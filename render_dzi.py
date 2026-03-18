@@ -25,7 +25,17 @@ from PIL import Image, ImageOps
 # ---------------------------------------------------------------------------
 
 def detect_faces(pil_img):
-    """Return (anchor_x, anchor_y) centred on detected faces, or None."""
+    """Return a required bbox (x0, y0, x1, y1) that the crop must fully contain,
+    or None if no faces detected.
+
+    Strategy: identify the highest-confidence face as the primary — the crop must
+    fully contain it. Then greedily expand the required bbox to include additional
+    faces in confidence order, as long as they fit within the crop dimensions.
+    The expansion step is done in smart_crop once crop dimensions are known.
+    Here we return only the primary face bbox; secondary faces are returned
+    separately so smart_crop can attempt to include them.
+    Returns (primary_bbox, secondary_bboxes) or None.
+    """
     np_rgb = np.array(pil_img.convert('RGB'))
 
     # Try mediapipe first — handles sunglasses, hats, non-frontal angles
@@ -37,28 +47,40 @@ def detect_faces(pil_img):
         detector.close()
         if result.detections:
             h, w = np_rgb.shape[:2]
-            xs, ys = [], []
+            # Build list of (score, x0, y0, x1, y1)
+            faces = []
             for det in result.detections:
                 bb = det.location_data.relative_bounding_box
-                xs += [bb.xmin * w, (bb.xmin + bb.width)  * w]
-                ys += [bb.ymin * h, (bb.ymin + bb.height) * h]
-            return int((min(xs) + max(xs)) / 2), int((min(ys) + max(ys)) / 2)
+                score = det.score[0] if det.score else 0.0
+                x0 = int(bb.xmin * w)
+                y0 = int(bb.ymin * h)
+                x1 = int((bb.xmin + bb.width)  * w)
+                y1 = int((bb.ymin + bb.height) * h)
+                faces.append((score, x0, y0, x1, y1))
+            faces.sort(reverse=True)
+            primary = faces[0][1:]
+            secondary = [f[1:] for f in faces[1:]]
+            return primary, secondary
     except Exception:
         pass
 
-    # Fallback: OpenCV Haar cascade
+    # Fallback: OpenCV Haar cascade with confidence scores
     try:
         import cv2
         cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
         cascade = cv2.CascadeClassifier(cascade_path)
-        gray  = cv2.cvtColor(np_rgb, cv2.COLOR_RGB2GRAY)
-        faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(20, 20))
-        if len(faces) > 0:
-            fx  = int(faces[:, 0].min())
-            fy  = int(faces[:, 1].min())
-            fx2 = int((faces[:, 0] + faces[:, 2]).max())
-            fy2 = int((faces[:, 1] + faces[:, 3]).max())
-            return (fx + fx2) // 2, (fy + fy2) // 2
+        gray = cv2.cvtColor(np_rgb, cv2.COLOR_RGB2GRAY)
+        rects, _, weights = cascade.detectMultiScale3(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(20, 20),
+            outputRejectLevels=True)
+        if len(rects) > 0:
+            faces = []
+            for (x, y, w, h), score in zip(rects, weights):
+                faces.append((float(score), x, y, x + w, y + h))
+            faces.sort(reverse=True)
+            primary = faces[0][1:]
+            secondary = [f[1:] for f in faces[1:]]
+            return primary, secondary
     except Exception:
         pass
 
@@ -66,7 +88,9 @@ def detect_faces(pil_img):
 
 
 def smart_crop(pil_img, target_w, target_h):
-    """Crop pil_img to target_w:target_h aspect ratio, centering on detected faces.
+    """Crop pil_img to target_w:target_h aspect ratio, prioritising faces.
+    The primary (highest-confidence) face is guaranteed to be fully in view.
+    Secondary faces are included greedily if the crop window allows.
     Returns cropped PIL image (not yet resized)."""
     src_w, src_h = pil_img.size
 
@@ -83,17 +107,37 @@ def smart_crop(pil_img, target_w, target_h):
         crop_w = src_w
         crop_h = round(src_w / target_ratio)
 
-    # Default anchor: center
-    anchor_x = src_w // 2
-    anchor_y = src_h // 2
+    face_result = detect_faces(pil_img)
 
-    face_anchor = detect_faces(pil_img)
-    if face_anchor:
-        anchor_x, anchor_y = face_anchor
+    if not face_result:
+        # No faces — center crop
+        left = (src_w - crop_w) // 2
+        top  = (src_h - crop_h) // 2
+        return pil_img.crop((left, top, left + crop_w, top + crop_h))
 
-    # Compute top-left of crop box, clamped to image bounds
-    left = max(0, min(anchor_x - crop_w // 2, src_w - crop_w))
-    top  = max(0, min(anchor_y - crop_h // 2, src_h - crop_h))
+    primary, secondary = face_result
+
+    # Start with required bbox = primary face
+    req_x0, req_y0, req_x1, req_y1 = primary
+
+    # Greedily expand to include secondary faces if they fit within the crop window
+    for sx0, sy0, sx1, sy1 in secondary:
+        candidate_x0 = min(req_x0, sx0)
+        candidate_y0 = min(req_y0, sy0)
+        candidate_x1 = max(req_x1, sx1)
+        candidate_y1 = max(req_y1, sy1)
+        if (candidate_x1 - candidate_x0) <= crop_w and (candidate_y1 - candidate_y0) <= crop_h:
+            req_x0, req_y0, req_x1, req_y1 = candidate_x0, candidate_y0, candidate_x1, candidate_y1
+
+    # Position crop so required bbox is fully contained, centered within slack
+    req_w = req_x1 - req_x0
+    req_h = req_y1 - req_y0
+    slack_x = crop_w - req_w
+    slack_y = crop_h - req_h
+    ideal_left = req_x0 - slack_x // 2
+    ideal_top  = req_y0 - slack_y // 2
+    left = max(0, min(ideal_left, src_w - crop_w))
+    top  = max(0, min(ideal_top,  src_h - crop_h))
 
     return pil_img.crop((left, top, left + crop_w, top + crop_h))
 
