@@ -76,11 +76,13 @@ def detect_faces(pil_img):
         if len(rects) > 0:
             faces = []
             for (x, y, w, h), score in zip(rects, weights):
-                faces.append((float(score), x, y, x + w, y + h))
-            faces.sort(reverse=True)
-            primary = faces[0][1:]
-            secondary = [f[1:] for f in faces[1:]]
-            return primary, secondary
+                if float(score) >= 5.0:
+                    faces.append((float(score), x, y, x + w, y + h))
+            if faces:
+                faces.sort(reverse=True)
+                primary = faces[0][1:]
+                secondary = [f[1:] for f in faces[1:]]
+                return primary, secondary
     except Exception:
         pass
 
