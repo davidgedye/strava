@@ -52,7 +52,13 @@ The `fetch-strava.yml` workflow runs at ~1 pm Pacific and does the following:
 2. **Fetch** current week/month/year summaries via `fetch-strava.sh`
 3. **Update history** — `incremental_update.py` adds JSON for any new activities and downloads their photos
 4. **Compute layouts** — `compute_layout.py` regenerates layouts for the current week/month/year (historical periods are cached)
-5. **Render DZI** — `render_dzi.py` smart-crops each activity photo to the aspect ratio of its route's bounding box (prioritising faces where detected), then renders Deep Zoom tiles for the current week/month/year; the social DZI is only re-rendered if the friend count changed
+5. **Render DZI** — `render_dzi.py` smart-crops each activity photo to the aspect ratio of its route's bounding box, then renders Deep Zoom tiles (512 px tiles, 1 px overlap) for the current week/month/year; the social DZI is only re-rendered if the friend count changed
+
+   **Face-aware cropping:** two detectors are tried in order:
+   - **mediapipe** (primary) — handles sunglasses, hats, non-frontal angles; confidence scores 0–1
+   - **OpenCV Haar cascade** (fallback) — `detectMultiScale3` returns unbounded confidence weights; only detections scoring ≥ 5.0 are used (real faces typically score 8+; false positives on objects/mannequins typically score < 5)
+
+   The highest-confidence detection is the *primary face* and is **guaranteed to be fully visible** in the crop. Lower-confidence faces are *secondary* and are included greedily — expanded into the required crop region only if they fit within the target aspect-ratio crop dimensions. The crop window is then positioned to centre the required region within any remaining slack.
 6. **Upload** everything back to R2
 
 OAuth refresh tokens are rotated automatically: if Strava issues a new refresh token, the workflow updates the `STRAVA_REFRESH_TOKEN` GitHub secret via a fine-grained PAT.
@@ -137,7 +143,26 @@ Then open `index.html` or `routes.html` in a browser (via any other local server
 
 You do not need the `data/dzi/` directory locally — the routes page falls back to a plain canvas if no Deep Zoom tiles are found.
 
-## Backfill
+## Manual Workflows
+
+### Surgical Update
+
+When a specific activity changes (photo replaced, GPS track edited, activity type corrected, or a run flagged as social), use the **Surgical Update** workflow to recompute only the affected layouts and DZI tiles rather than a full re-render:
+
+**Actions → Surgical Update → Run workflow**
+
+Inputs:
+- `activity_ids` — comma-separated Strava activity IDs
+- `change_type` — one of:
+  - `photo` — photo added or replaced (re-renders DZI only; no layout recompute)
+  - `route` — GPS track edited (recomputes layout + DZI for affected month/year/week)
+  - `social` — `with_friends` flag toggled (recomputes social layout + DZI only)
+  - `type` — activity type changed, e.g. Run → Hike (recomputes both old and new type's periods)
+- `previous_types` — required for `change_type=type`; the activity type *before* the change, parallel to `activity_ids` (e.g. `"Run,Trail Run"`)
+
+The workflow automatically determines which periods are affected, downloads only the necessary data, recomputes layouts (skipped for `photo`), re-renders DZI tiles, and uploads the results.
+
+### Backfill
 
 If there are gaps in history (e.g. the workflow wasn't running for a period), use the **Backfill Activities & Photos** workflow:
 
@@ -154,7 +179,8 @@ Inputs:
 | `fetch-strava.sh` | Fetches week/month/year mileage totals from Strava API |
 | `incremental_update.py` | Adds per-activity history JSON and downloads activity photos |
 | `compute_layout.py` | Pre-computes glacier-packed route layouts for all periods |
-| `render_dzi.py` | Smart-crops activity photos to each route's bounding box aspect ratio (faces prioritised), then renders Deep Zoom Image tiles for a given period |
-| `render_dzi_all.sh` | Batch-renders DZI for every period (portrait + landscape) |
+| `render_dzi.py` | Smart-crops activity photos to each route's bounding box aspect ratio (face-aware: mediapipe primary + OpenCV fallback), then renders Deep Zoom Image tiles for a given period |
+| `render_dzi_all.sh` | Batch-renders DZI for every period (portrait + landscape), including social and hikes |
+| `affected_periods.py` | Given a list of activity IDs and a change type, outputs the minimal set of layout and DZI periods that need recomputing |
 | `backfill_activities.py` | Fetches missing activities and photos since a given date |
 | `extract_photos.py` | One-time: extracts photos from a Strava data export ZIP |
