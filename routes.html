@@ -561,7 +561,28 @@ function initOSD(period) {
     gestureSettingsUnknown: { clickToZoom: false, dblClickToZoom: false },
   });
 
+  // CSS translate optimisation: during a pan-only drag, move the canvas overlay
+  // via GPU-composited CSS translate (no redraw) and commit with one render on pointer-up.
+  // Same principle as the canvas-only drag path; delta in px = -Δcenter * zoom * cw.
+  let osdPanDrag    = false;
+  let osdDragCenter = null;  // OSD image-space center at last committed render
+  let osdDragZoom   = null;  // OSD zoom at drag start
+
   viewer.addHandler('update-viewport', () => {
+    if (osdPanDrag) {
+      const zoom = viewer.viewport.getZoom(true);
+      if (Math.abs(zoom - osdDragZoom) < 1e-6) {
+        // Pan only — CSS translate, no canvas redraw
+        const center = viewer.viewport.getCenter(true);
+        const cw = viewer.container.offsetWidth;
+        const dx = -(center.x - osdDragCenter.x) * zoom * cw;
+        const dy = -(center.y - osdDragCenter.y) * zoom * cw;
+        canvas.style.transform = `translate(${dx}px,${dy}px)`;
+        return;
+      }
+    }
+    // Zoom change or no drag: full redraw
+    canvas.style.transform = '';
     renderFromOSD();
   });
 
@@ -586,21 +607,35 @@ function initOSD(period) {
     pressedId  = hit ? hit.id : null;
     pressStart = { x: e.clientX, y: e.clientY };
     if (pressedId) renderFromOSD();
+    osdPanDrag    = true;
+    osdDragCenter = viewer.viewport.getCenter(true);
+    osdDragZoom   = viewer.viewport.getZoom(true);
   });
   viewer.canvas.addEventListener('pointerup', e => {
     if (!e.isPrimary) return;
-    if (pressedId) { pressedId = null; renderFromOSD(); }
+    if (pressedId) { pressedId = null; }
+    if (osdPanDrag) {
+      osdPanDrag = false;
+      canvas.style.transform = '';
+      renderFromOSD();
+    }
+  });
+  viewer.canvas.addEventListener('pointercancel', e => {
+    if (!e.isPrimary) return;
+    osdPanDrag = false;
+    canvas.style.transform = '';
+    renderFromOSD();
   });
   viewer.canvas.addEventListener('pointermove', e => {
     if (pressedId && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 4) {
       pressedId  = null;
       pressStart = null;
-      renderFromOSD();
     }
   });
 
-  // Hover (desktop) on OSD canvas — pass absolute screen coords
+  // Hover (desktop) on OSD canvas — suppress during drag to avoid spurious redraws
   viewer.canvas.addEventListener('mousemove', e => {
+    if (osdPanDrag) return;
     handleHover(e.clientX, e.clientY);
   });
   viewer.canvas.addEventListener('mouseleave', () => {
