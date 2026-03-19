@@ -60,11 +60,12 @@ jobs:
             # Only need the specific activity files — find them by searching history
             echo "Photo change: downloading only the affected activity history files..."
             for ID in $(echo "${{ inputs.activity_ids }}" | tr ',' ' '); do
+              # FILE_PATH is already a full bucket-relative path like data/history/YYYY/MM/ID.json
               FILE_PATH=$(aws s3 ls s3://strava-data/data/history/ --recursive \
                 --endpoint-url "$R2_ENDPOINT" | grep "/${ID}\.json$" | awk '{print $NF}')
               if [[ -n "$FILE_PATH" ]]; then
-                mkdir -p "data/$(dirname $FILE_PATH)"
-                aws s3 cp "s3://strava-data/$FILE_PATH" "data/$FILE_PATH" \
+                mkdir -p "$(dirname "$FILE_PATH")"
+                aws s3 cp "s3://strava-data/$FILE_PATH" "$FILE_PATH" \
                   --endpoint-url "$R2_ENDPOINT"
                 echo "  Downloaded: $FILE_PATH"
               else
@@ -79,6 +80,7 @@ jobs:
 
       - name: Determine affected periods
         run: |
+          set -eo pipefail
           PREV_TYPES_ARG=""
           if [[ -n "${{ inputs.previous_types }}" ]]; then
             PREV_TYPES_ARG="--previous-types ${{ inputs.previous_types }}"
