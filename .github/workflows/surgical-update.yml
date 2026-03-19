@@ -1,15 +1,9 @@
 name: Surgical Update
-# Recomputes only the layouts and DZI periods affected by changes to specific activities.
-# Use this instead of a full re-render when you know which activities changed.
+# Recomputes layouts and DZI for only the periods affected by changes to specific
+# activities. Always re-fetches the latest data (GPS track + photo) from Strava.
 #
-# change_type:
-#   photo  — photo added or replaced (DZI only, no layout recompute)
-#   route  — GPS track edited (layout + DZI for affected month/year/week)
-#   social — with_friends flag toggled (social layout + DZI only)
-#   type   — activity type changed, e.g. Run→Hike (layout + DZI for old and new periods)
-#
-# For change_type=type, also supply previous_types: a parallel comma-separated list
-# of the activity type BEFORE the change (e.g. "Run,Trail Run").
+# For type changes (e.g. Run→Hike), supply previous_types so the old-type periods
+# are also recomputed alongside the new ones.
 
 on:
   workflow_dispatch:
@@ -17,12 +11,8 @@ on:
       activity_ids:
         description: 'Comma-separated Strava activity IDs'
         required: true
-      change_type:
-        description: 'Type of change: photo | route | social | type'
-        required: true
-        default: 'photo'
       previous_types:
-        description: 'Previous activity types (required for change_type=type, parallel to activity_ids)'
+        description: 'Previous activity types (required when type changed, parallel to activity_ids)'
         required: false
         default: ''
 
@@ -41,167 +31,13 @@ jobs:
           sudo apt-get update && sudo apt-get install -y jq libvips
           pip install pyvips Pillow opencv-python-headless numpy mediapipe
 
-      - name: Download layouts from R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-        run: |
-          mkdir -p data/history data/layouts data/photos
-          aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
-
-      - name: Download history from R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-        run: |
-          if [[ "${{ inputs.change_type }}" == "photo" ]]; then
-            # Only need the specific activity files — find them by searching history
-            echo "Photo change: downloading only the affected activity history files..."
-            for ID in $(echo "${{ inputs.activity_ids }}" | tr ',' ' '); do
-              # FILE_PATH is already a full bucket-relative path like data/history/YYYY/MM/ID.json
-              FILE_PATH=$(aws s3 ls s3://strava-data/data/history/ --recursive \
-                --endpoint-url "$R2_ENDPOINT" | grep "/${ID}\.json$" | awk '{print $NF}')
-              if [[ -n "$FILE_PATH" ]]; then
-                mkdir -p "$(dirname "$FILE_PATH")"
-                aws s3 cp "s3://strava-data/$FILE_PATH" "$FILE_PATH" \
-                  --endpoint-url "$R2_ENDPOINT"
-                echo "  Downloaded: $FILE_PATH"
-              else
-                echo "  WARNING: history file not found for activity $ID"
-              fi
-            done
-          else
-            # route/social/type changes need all history for compute_layout.py
-            echo "Downloading all history..."
-            aws s3 sync s3://strava-data/data/history/ data/history/ --endpoint-url "$R2_ENDPOINT"
-          fi
-
-      - name: Determine affected periods
-        run: |
-          set -eo pipefail
-          PREV_TYPES_ARG=""
-          if [[ -n "${{ inputs.previous_types }}" ]]; then
-            PREV_TYPES_ARG="--previous-types ${{ inputs.previous_types }}"
-          fi
-          python3 affected_periods.py \
-            --ids "${{ inputs.activity_ids }}" \
-            --change-type "${{ inputs.change_type }}" \
-            --history data/history \
-            $PREV_TYPES_ARG \
-            | tee /tmp/affected_manifest.json
-          echo "Layout periods: $(python3 -c "import json; print(json.load(open('/tmp/affected_manifest.json'))['layout_periods'])")"
-          echo "DZI periods:    $(python3 -c "import json; print(json.load(open('/tmp/affected_manifest.json'))['dzi_periods'])")"
-
-      - name: Download photos for affected periods
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-        run: |
-          python3 - <<'PYEOF'
-          import json, os, subprocess
-          from concurrent.futures import ThreadPoolExecutor
-
-          R2_ENDPOINT = os.environ['R2_ENDPOINT']
-
-          with open('/tmp/affected_manifest.json') as f:
-              manifest = json.load(f)
-
-          # Collect activity IDs from all affected period layout JSONs (portrait only —
-          # portrait and landscape have identical activity lists)
-          photo_ids = set()
-          for period in manifest['dzi_periods']:
-              layout_file = f'data/layouts/{period}.json'
-              if os.path.exists(layout_file):
-                  layout = json.load(open(layout_file))
-                  for act in layout.get('activities', []):
-                      photo_ids.add(str(act['id']))
-
-          print(f"Downloading up to {len(photo_ids)} photos for affected periods...")
-
-          def download_photo(photo_id):
-              result = subprocess.run(
-                  ['aws', 's3', 'cp',
-                   f's3://strava-data/data/photos/{photo_id}.jpg',
-                   f'data/photos/{photo_id}.jpg',
-                   '--endpoint-url', R2_ENDPOINT],
-                  capture_output=True)
-              if result.returncode != 0:
-                  pass  # no photo for this activity — normal
-
-          with ThreadPoolExecutor(max_workers=20) as pool:
-              pool.map(download_photo, photo_ids)
-
-          downloaded = sum(1 for pid in photo_ids
-                           if os.path.exists(f'data/photos/{pid}.jpg'))
-          print(f"Downloaded {downloaded}/{len(photo_ids)} photos.")
-          PYEOF
-
-      - name: Fetch new photos from Strava API
-        if: inputs.change_type == 'photo'
-        env:
-          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
-          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
-          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-        run: |
-          python3 - <<'PYEOF'
-          import json, os, subprocess, urllib.request, urllib.parse
-
-          # Refresh OAuth token
-          data = urllib.parse.urlencode({
-              'client_id':     os.environ['STRAVA_CLIENT_ID'],
-              'client_secret': os.environ['STRAVA_CLIENT_SECRET'],
-              'refresh_token': os.environ['STRAVA_REFRESH_TOKEN'],
-              'grant_type':    'refresh_token',
-          }).encode()
-          req = urllib.request.Request('https://www.strava.com/oauth/token', data=data)
-          with urllib.request.urlopen(req) as resp:
-              access_token = json.loads(resp.read())['access_token']
-
-          activity_ids = [i.strip() for i in '${{ inputs.activity_ids }}'.split(',') if i.strip()]
-          R2_ENDPOINT  = os.environ['R2_ENDPOINT']
-          os.makedirs('data/photos', exist_ok=True)
-
-          for act_id in activity_ids:
-              print(f'Fetching photo for activity {act_id}...')
-              url = f'https://www.strava.com/api/v3/activities/{act_id}/photos?size=2048'
-              req = urllib.request.Request(url, headers={'Authorization': f'Bearer {access_token}'})
-              try:
-                  with urllib.request.urlopen(req) as resp:
-                      photos = json.loads(resp.read())
-                  if not photos:
-                      print(f'  No photos on Strava for {act_id} — skipping.')
-                      continue
-                  photo_url = photos[0].get('urls', {}).get('2048')
-                  if not photo_url:
-                      print(f'  No 2048px URL for {act_id} — skipping.')
-                      continue
-                  with urllib.request.urlopen(photo_url) as resp:
-                      photo_bytes = resp.read()
-                  out_path = f'data/photos/{act_id}.jpg'
-                  open(out_path, 'wb').write(photo_bytes)
-                  print(f'  Downloaded {len(photo_bytes):,} bytes → {out_path}')
-                  subprocess.run(['aws', 's3', 'cp', out_path,
-                                  f's3://strava-data/{out_path}',
-                                  '--endpoint-url', R2_ENDPOINT], check=True)
-                  print(f'  Uploaded to R2.')
-              except Exception as e:
-                  print(f'  Warning: could not fetch photo for {act_id}: {e}')
-          PYEOF
-
       - name: Re-fetch activity data from Strava
-        if: inputs.change_type == 'route' || inputs.change_type == 'type'
         env:
           STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
           STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
           STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
         run: |
-          # Refresh OAuth token and export for backfill script
+          mkdir -p data/history data/photos data/layouts
           ACCESS_TOKEN=$(python3 - <<'PYEOF'
           import json, os, urllib.request, urllib.parse
           data = urllib.parse.urlencode({
@@ -215,25 +51,121 @@ jobs:
               print(json.loads(resp.read())['access_token'])
           PYEOF
           )
+          # Re-fetches GPS track, photo, and with_friends classification from Strava
           ACCESS_TOKEN="$ACCESS_TOKEN" python3 backfill_activities.py \
             --force-ids "${{ inputs.activity_ids }}" \
             --history data/history \
             --photos  data/photos
 
-      - name: Recompute affected layouts
-        if: inputs.change_type != 'photo'
+      - name: Determine affected periods
         run: |
-          LAYOUT_PERIODS=$(python3 -c "
+          set -eo pipefail
+          PREV_TYPES_ARG=""
+          if [[ -n "${{ inputs.previous_types }}" ]]; then
+            PREV_TYPES_ARG="--previous-types ${{ inputs.previous_types }}"
+          fi
+          python3 affected_periods.py \
+            --ids "${{ inputs.activity_ids }}" \
+            --history data/history \
+            $PREV_TYPES_ARG \
+            | tee /tmp/affected_manifest.json
+          echo "Periods: $(python3 -c "import json; print(json.load(open('/tmp/affected_manifest.json'))['layout_periods'])")"
+
+      - name: Download targeted history from R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          python3 - <<'PYEOF'
+          import datetime, json, os, subprocess
+
+          manifest     = json.load(open('/tmp/affected_manifest.json'))
+          periods      = manifest['layout_periods']
+          endpoint     = os.environ['R2_ENDPOINT']
+          activity_ids = [i.strip() for i in '${{ inputs.activity_ids }}'.split(',') if i.strip()]
+
+          # Exclude files already written by backfill so we don't overwrite fresh data
+          excludes = [arg for act_id in activity_ids for arg in ('--exclude', f'*{act_id}.json')]
+
+          def s3_sync(src, dst):
+              subprocess.run(
+                  ['aws', 's3', 'sync', src, dst, '--endpoint-url', endpoint] + excludes,
+                  check=True)
+
+          needs_all = any(p in ('social', 'hikes') for p in periods)
+          if needs_all:
+              print('Downloading all history (social/hikes period affected)...')
+              s3_sync('s3://strava-data/data/history/', 'data/history/')
+          else:
+              years = set()
+              now_year = str(datetime.datetime.now().year)
+              for p in periods:
+                  if p == 'week':
+                      years.add(now_year)
+                  elif '-' in p:
+                      years.add(p.split('-')[0])
+                  else:
+                      years.add(p)  # bare year key
+              for year in sorted(years):
+                  print(f'Downloading history/{year}/...')
+                  s3_sync(f's3://strava-data/data/history/{year}/', f'data/history/{year}/')
+          PYEOF
+
+      - name: Recompute affected layouts
+        run: |
+          PERIODS=$(python3 -c "
           import json
           m = json.load(open('/tmp/affected_manifest.json'))
           print(','.join(m['layout_periods']))
           ")
-          if [[ -z "$LAYOUT_PERIODS" ]]; then
+          if [[ -z "$PERIODS" ]]; then
             echo "No layout periods to recompute."
           else
-            echo "Force-recomputing: $LAYOUT_PERIODS"
-            python3 compute_layout.py data/history data/layouts --force-periods="$LAYOUT_PERIODS"
+            echo "Recomputing: $PERIODS"
+            python3 compute_layout.py data/history data/layouts --only-periods="$PERIODS"
           fi
+
+      - name: Download photos for affected periods
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess
+          from concurrent.futures import ThreadPoolExecutor
+
+          R2_ENDPOINT  = os.environ['R2_ENDPOINT']
+          manifest     = json.load(open('/tmp/affected_manifest.json'))
+          activity_ids = set('${{ inputs.activity_ids }}'.split(','))  # already fetched by backfill
+
+          # Collect IDs from freshly-computed layout files
+          photo_ids = set()
+          for period in manifest['dzi_periods']:
+              layout_file = f'data/layouts/{period}.json'
+              if os.path.exists(layout_file):
+                  for act in json.load(open(layout_file)).get('activities', []):
+                      photo_ids.add(str(act['id']))
+
+          # Skip IDs already downloaded by backfill (but still try — backfill may have failed)
+          print(f'Downloading up to {len(photo_ids)} photos for affected periods...')
+
+          def download_photo(photo_id):
+              out = f'data/photos/{photo_id}.jpg'
+              if os.path.exists(out):
+                  return  # already present (backfill downloaded it)
+              subprocess.run(
+                  ['aws', 's3', 'cp', f's3://strava-data/data/photos/{photo_id}.jpg', out,
+                   '--endpoint-url', R2_ENDPOINT],
+                  capture_output=True)
+
+          with ThreadPoolExecutor(max_workers=20) as pool:
+              pool.map(download_photo, photo_ids)
+
+          downloaded = sum(1 for pid in photo_ids if os.path.exists(f'data/photos/{pid}.jpg'))
+          print(f'Downloaded {downloaded}/{len(photo_ids)} photos.')
+          PYEOF
 
       - name: Re-render DZI for affected periods
         run: |
@@ -280,7 +212,7 @@ jobs:
           aws configure set default.s3.max_queue_size 10000
 
           python3 - <<'PYEOF'
-          import json, os, subprocess
+          import glob as _glob, json, os, subprocess
 
           R2_ENDPOINT = os.environ['R2_ENDPOINT']
           S3_BASE     = 's3://strava-data'
@@ -299,32 +231,31 @@ jobs:
           with open('/tmp/affected_manifest.json') as f:
               manifest = json.load(f)
 
-          change_type    = '${{ inputs.change_type }}'
+          activity_ids  = [i.strip() for i in '${{ inputs.activity_ids }}'.split(',') if i.strip()]
           layout_periods = manifest['layout_periods']
           dzi_periods    = manifest['dzi_periods']
 
-          # Upload re-fetched history JSONs so R2 has the fresh GPS track/data
-          if change_type in ('route', 'type'):
-              activity_ids = [i.strip() for i in '${{ inputs.activity_ids }}'.split(',') if i.strip()]
-              import glob as _glob
-              for act_id in activity_ids:
-                  matches = _glob.glob(f'data/history/**/{act_id}.json', recursive=True)
-                  for path in matches:
-                      print(f'Uploading history: {path}')
-                      s3_cp(path, f'{S3_BASE}/{path}')
+          # Upload re-fetched history JSONs
+          for act_id in activity_ids:
+              for path in _glob.glob(f'data/history/**/{act_id}.json', recursive=True):
+                  print(f'Uploading history: {path}')
+                  s3_cp(path, f'{S3_BASE}/{path}')
+
+          # Upload re-fetched photos (backfill may have downloaded a new one)
+          for act_id in activity_ids:
+              photo = f'data/photos/{act_id}.jpg'
+              if os.path.exists(photo):
+                  print(f'Uploading photo: {photo}')
+                  s3_cp(photo, f'{S3_BASE}/{photo}')
 
           # Upload recomputed layout files (portrait + landscape)
-          if change_type != 'photo':
-              for p in layout_periods:
-                  for suffix in ('', '-land'):
-                      key   = f'{p}{suffix}'
-                      local = f'data/layouts/{key}.json'
-                      if os.path.exists(local):
-                          print(f'Uploading layout: {key}.json')
-                          s3_cp(local, f'{S3_BASE}/data/layouts/{key}.json')
-              # index.json is always rewritten by compute_layout.py
-              if os.path.exists('data/layouts/index.json'):
-                  s3_cp('data/layouts/index.json', f'{S3_BASE}/data/layouts/index.json')
+          for p in layout_periods:
+              for suffix in ('', '-land'):
+                  key   = f'{p}{suffix}'
+                  local = f'data/layouts/{key}.json'
+                  if os.path.exists(local):
+                      print(f'Uploading layout: {key}.json')
+                      s3_cp(local, f'{S3_BASE}/data/layouts/{key}.json')
 
           # Upload re-rendered DZI directories (portrait + landscape)
           for p in dzi_periods:

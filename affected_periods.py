@@ -101,23 +101,18 @@ def main():
         return None
 
     ids_raw            = get_arg('--ids')
-    change_type        = get_arg('--change-type')
     history_path       = get_arg('--history') or 'data/history'
     previous_types_raw = get_arg('--previous-types')
 
-    if not ids_raw or not change_type:
-        print('ERROR: --ids and --change-type are required', file=sys.stderr)
+    if not ids_raw:
+        print('ERROR: --ids is required', file=sys.stderr)
         sys.exit(1)
 
-    if change_type not in ('photo', 'route', 'social', 'type'):
-        print(f'ERROR: --change-type must be one of: photo, route, social, type', file=sys.stderr)
-        sys.exit(1)
-
-    activity_ids = [i.strip() for i in ids_raw.split(',') if i.strip()]
+    activity_ids   = [i.strip() for i in ids_raw.split(',') if i.strip()]
     previous_types = ([t.strip() for t in previous_types_raw.split(',')]
                       if previous_types_raw else [])
 
-    if change_type == 'type' and len(previous_types) != len(activity_ids):
+    if previous_types and len(previous_types) != len(activity_ids):
         print('ERROR: --previous-types must have the same number of entries as --ids',
               file=sys.stderr)
         sys.exit(1)
@@ -125,10 +120,8 @@ def main():
     history_dir = Path(history_path)
     cur = current_periods()
 
-    layout_periods = set()
-    dzi_periods    = set()
-    needs_strava   = False
-    found_any      = False
+    periods   = set()
+    found_any = False
 
     for idx, act_id in enumerate(activity_ids):
         act = find_activity(history_dir, act_id)
@@ -137,42 +130,21 @@ def main():
             continue
         found_any = True
 
-        if change_type == 'photo':
-            # DZI only — no layout recompute
-            dzi_periods |= periods_for_activity(act, cur)
+        # Current periods this activity belongs to
+        periods |= periods_for_activity(act, cur)
 
-        elif change_type == 'route':
-            affected = periods_for_activity(act, cur)
-            layout_periods |= affected
-            dzi_periods    |= affected
-
-        elif change_type == 'social':
-            # Only the social layout/DZI regardless of which activity changed
-            layout_periods.add('social')
-            dzi_periods.add('social')
-
-        elif change_type == 'type':
-            prev_type = previous_types[idx]
-            old_periods = periods_for_activity(act, cur, type_override=prev_type)
-            new_periods = periods_for_activity(act, cur)
-            affected = old_periods | new_periods
-            layout_periods |= affected
-            dzi_periods    |= affected
-            needs_strava = True
+        # If the activity type changed, also recompute the old-type periods
+        if idx < len(previous_types):
+            periods |= periods_for_activity(act, cur, type_override=previous_types[idx])
 
     if not found_any:
         print('ERROR: none of the specified activity IDs were found in history', file=sys.stderr)
         sys.exit(1)
 
-    # week is always recomputed by compute_layout.py — no need to force it,
-    # but include it in dzi_periods so the DZI gets re-rendered.
-    # Remove 'week' from layout_periods since compute_layout always does it.
-    layout_periods.discard('week')
-
     manifest = {
-        'layout_periods': sorted(layout_periods),
-        'dzi_periods':    sorted(dzi_periods),
-        'needs_strava_json': needs_strava,
+        'layout_periods': sorted(periods),
+        'dzi_periods':    sorted(periods),
+        'needs_strava_json': bool(previous_types),
     }
     print(json.dumps(manifest))
 
