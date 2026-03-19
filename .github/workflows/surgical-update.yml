@@ -140,6 +140,7 @@ jobs:
           PYEOF
 
       - name: Fetch new photos from Strava API
+        if: inputs.change_type == 'photo'
         env:
           STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
           STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
@@ -192,6 +193,32 @@ jobs:
               except Exception as e:
                   print(f'  Warning: could not fetch photo for {act_id}: {e}')
           PYEOF
+
+      - name: Re-fetch activity data from Strava
+        if: inputs.change_type == 'route' || inputs.change_type == 'type'
+        env:
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+        run: |
+          # Refresh OAuth token and export for backfill script
+          ACCESS_TOKEN=$(python3 - <<'PYEOF'
+          import json, os, urllib.request, urllib.parse
+          data = urllib.parse.urlencode({
+              'client_id':     os.environ['STRAVA_CLIENT_ID'],
+              'client_secret': os.environ['STRAVA_CLIENT_SECRET'],
+              'refresh_token': os.environ['STRAVA_REFRESH_TOKEN'],
+              'grant_type':    'refresh_token',
+          }).encode()
+          req = urllib.request.Request('https://www.strava.com/oauth/token', data=data)
+          with urllib.request.urlopen(req) as resp:
+              print(json.loads(resp.read())['access_token'])
+          PYEOF
+          )
+          ACCESS_TOKEN="$ACCESS_TOKEN" python3 backfill_activities.py \
+            --force-ids "${{ inputs.activity_ids }}" \
+            --history data/history \
+            --photos  data/photos
 
       - name: Recompute affected layouts
         if: inputs.change_type != 'photo'
@@ -275,6 +302,16 @@ jobs:
           change_type    = '${{ inputs.change_type }}'
           layout_periods = manifest['layout_periods']
           dzi_periods    = manifest['dzi_periods']
+
+          # Upload re-fetched history JSONs so R2 has the fresh GPS track/data
+          if change_type in ('route', 'type'):
+              activity_ids = [i.strip() for i in '${{ inputs.activity_ids }}'.split(',') if i.strip()]
+              import glob as _glob
+              for act_id in activity_ids:
+                  matches = _glob.glob(f'data/history/**/{act_id}.json', recursive=True)
+                  for path in matches:
+                      print(f'Uploading history: {path}')
+                      s3_cp(path, f'{S3_BASE}/{path}')
 
           # Upload recomputed layout files (portrait + landscape)
           if change_type != 'photo':
