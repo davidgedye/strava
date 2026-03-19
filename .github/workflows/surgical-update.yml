@@ -139,6 +139,60 @@ jobs:
           print(f"Downloaded {downloaded}/{len(photo_ids)} photos.")
           PYEOF
 
+      - name: Fetch new photos from Strava API
+        env:
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          python3 - <<'PYEOF'
+          import json, os, subprocess, urllib.request, urllib.parse
+
+          # Refresh OAuth token
+          data = urllib.parse.urlencode({
+              'client_id':     os.environ['STRAVA_CLIENT_ID'],
+              'client_secret': os.environ['STRAVA_CLIENT_SECRET'],
+              'refresh_token': os.environ['STRAVA_REFRESH_TOKEN'],
+              'grant_type':    'refresh_token',
+          }).encode()
+          req = urllib.request.Request('https://www.strava.com/oauth/token', data=data)
+          with urllib.request.urlopen(req) as resp:
+              access_token = json.loads(resp.read())['access_token']
+
+          activity_ids = [i.strip() for i in '${{ inputs.activity_ids }}'.split(',') if i.strip()]
+          R2_ENDPOINT  = os.environ['R2_ENDPOINT']
+          os.makedirs('data/photos', exist_ok=True)
+
+          for act_id in activity_ids:
+              print(f'Fetching photo for activity {act_id}...')
+              url = f'https://www.strava.com/api/v3/activities/{act_id}/photos?size=2048'
+              req = urllib.request.Request(url, headers={'Authorization': f'Bearer {access_token}'})
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      photos = json.loads(resp.read())
+                  if not photos:
+                      print(f'  No photos on Strava for {act_id} — skipping.')
+                      continue
+                  photo_url = photos[0].get('urls', {}).get('2048')
+                  if not photo_url:
+                      print(f'  No 2048px URL for {act_id} — skipping.')
+                      continue
+                  with urllib.request.urlopen(photo_url) as resp:
+                      photo_bytes = resp.read()
+                  out_path = f'data/photos/{act_id}.jpg'
+                  open(out_path, 'wb').write(photo_bytes)
+                  print(f'  Downloaded {len(photo_bytes):,} bytes → {out_path}')
+                  subprocess.run(['aws', 's3', 'cp', out_path,
+                                  f's3://strava-data/{out_path}',
+                                  '--endpoint-url', R2_ENDPOINT], check=True)
+                  print(f'  Uploaded to R2.')
+              except Exception as e:
+                  print(f'  Warning: could not fetch photo for {act_id}: {e}')
+          PYEOF
+
       - name: Recompute affected layouts
         if: inputs.change_type != 'photo'
         run: |
