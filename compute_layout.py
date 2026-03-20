@@ -12,10 +12,10 @@ Outputs data/layouts/ directory containing:
 Usage:
     python3 compute_layout.py [data/history] [data/layouts]
 
-── Glacier packing ────────────────────────────────────────────────────────────
+── Packing ────────────────────────────────────────────────────────────────────
 
-Routes are packed using "glacier" packing, which extends shelf packing with a
-valley-fill step and a final row shuffle.
+Routes are packed using boxcraft (infill=True), which combines shelf packing
+with valley-fill and a final row shuffle.
 
 1. Shelf row assignment
    Items are sorted tallest-first and packed greedily into rows, each row as
@@ -27,25 +27,10 @@ valley-fill step and a final row shuffle.
    silhouette. Items are bottom-aligned within the row, leaving open space
    above the shorter items near the edges.
 
-3. Glacier fill (valley filling)
-   After placing each row's main items, the algorithm looks for opportunities
-   to fill the open space above the shorter edge items on each side. For each
-   side it computes a list of cumulative "open boxes" expanding inward:
-
-     Box k spans items 0..k from the edge.
-     Box height = row_height − max(h₀..hₖ)   (open space above the tallest
-                                                item in the box's footprint)
-     Box width  = cumulative width of items 0..k
-
-   Boxes grow wider but shorter as k increases toward the taller centre items,
-   so the centre item acts as a natural barrier that prevents left and right
-   fills from encroaching on each other.
-
-   The algorithm scans all remaining unplaced items for the one with the
-   largest area that fits any box, then places it flush with the inner edge of
-   the widest valid box (pushing it as far inward as possible). The outer gap
-   left by that placement is then searched again, repeating until nothing more
-   fits. At most a handful of fills occur per row.
+3. Valley fill
+   After placing each row's main items, the algorithm fills the open space
+   above the shorter edge items on each side. The side with the most open
+   valley area is filled first.
 
 4. Row shuffle
    After all rows are packed, their vertical order is randomised with a fixed
@@ -62,11 +47,12 @@ valley-fill step and a final row shuffle.
 
 import json
 import math
-import random
 import sys
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+import boxcraft as bc
 
 # ── Canvas constants ───────────────────────────────────────────────────────────
 
@@ -243,255 +229,40 @@ def extract_circle(act):
     }
 
 
-# ── Shelf packing ──────────────────────────────────────────────────────────────
+# ── Boxcraft packing ──────────────────────────────────────────────────────────
 
-def _css_size(r, css_scale):
-    w = max(r['span_lng'] * r['cos_lat'] * css_scale + CSS_MARGIN, CSS_MARGIN)
-    h = max(r['span_lat']               * css_scale + CSS_MARGIN, CSS_MARGIN)
-    return w, h
-
-
-def _mountain(items_desc):
-    """Reorder a tallest-first list so the tallest lands in the centre,
-    with shorter items radiating outward symmetrically to the ends."""
-    n = len(items_desc)
-    if n == 0:
-        return []
-    result = [None] * n
-    mid = n // 2
-    pos_order = [mid]
-    l, r = mid - 1, mid + 1
-    while l >= 0 or r < n:
-        if l >= 0:
-            pos_order.append(l); l -= 1
-        if r < n:
-            pos_order.append(r); r += 1
-    for item, pos in zip(items_desc, pos_order):
-        result[pos] = item
-    return result
+def _boxes(items, css_scale):
+    return [bc.Box(max(r['span_lng'] * r['cos_lat'] * css_scale + CSS_MARGIN, CSS_MARGIN),
+                   max(r['span_lat']               * css_scale + CSS_MARGIN, CSS_MARGIN))
+            for r in items]
 
 
-def _shelf_css(routes, css_scale, cw=CANVAS_W, ch=CANVAS_H):
-    # ── 1. Assign routes to rows (greedy, tallest-first) ──────────────────────
-    order = sorted(range(len(routes)), key=lambda i: -routes[i]['span_lat'])
-    rows = []
-    cur_row, cur_w = [], OUTER_CSS
-    for i in order:
-        w, _ = _css_size(routes[i], css_scale)
-        if cur_row and cur_w + w > cw - OUTER_CSS:
-            rows.append(cur_row)
-            cur_row, cur_w = [], OUTER_CSS
-        if cur_w + w > cw - OUTER_CSS:   # too wide even on a fresh row
-            return
-        cur_row.append(i)
-        cur_w += w + PADDING_CSS
-    if cur_row:
-        rows.append(cur_row)
-
-    # ── 2. Check total height fits ─────────────────────────────────────────────
-    row_h = [max(_css_size(routes[i], css_scale)[1] for i in row) for row in rows]
-    if OUTER_CSS + sum(h + PADDING_CSS for h in row_h) + OUTER_CSS > ch:
-        return
-
-    # ── 3. Mountain-order items within each row (tallest centre, short ends) ───
-    ordered_rows = [_mountain(sorted(row, key=lambda i: -routes[i]['span_lat']))
-                    for row in rows]
-
-    # ── 4. Mountain-order the rows (tallest row in middle, short rows top/bot) ─
-    row_sequence = _mountain(sorted(range(len(ordered_rows)),
-                                    key=lambda r: -row_h[r]))
-
-    # ── 5. Emit centre positions (each row horizontally centred) ─────────────
-    row_widths = [sum(_css_size(routes[i], css_scale)[0] for i in row)
-                  + PADDING_CSS * (len(row) - 1)
-                  for row in ordered_rows]
-    y = OUTER_CSS
-    for r in row_sequence:
-        x = (cw - row_widths[r]) / 2
-        for i in ordered_rows[r]:
-            w, _ = _css_size(routes[i], css_scale)
-            yield i, x + w / 2, y + row_h[r] / 2
-            x += w + PADDING_CSS
-        y += row_h[r] + PADDING_CSS
+def _pack(items, css_scale, cw=CANVAS_W, ch=CANVAS_H, seed=0, shuffled=False):
+    return bc.pack(_boxes(items, css_scale), infill=True, balanced=True,
+                   shuffled=shuffled, seed=seed,
+                   width=cw, gap_h=PADDING_CSS, gap_v=PADDING_CSS, edge_gap=OUTER_CSS)
 
 
-def shelf_fits(routes, css_scale, cw=CANVAS_W, ch=CANVAS_H):
-    return sum(1 for _ in _shelf_css(routes, css_scale, cw, ch)) == len(routes)
-
-
-def max_shelf_css_scale(routes, cw=CANVAS_W, ch=CANVAS_H):
-    if not routes:
-        return 50_000.0
-    lo, hi = 1.0, 50_000.0
-    for _ in range(55):
-        mid = (lo + hi) / 2
-        if shelf_fits(routes, mid, cw, ch):
-            lo = mid
-        else:
-            hi = mid
-    return lo
-
-
-def shelf_positions_css(routes, css_scale, cw=CANVAS_W, ch=CANVAS_H):
-    result = [None] * len(routes)
-    for i, dx, dy in _shelf_css(routes, css_scale, cw, ch):
-        result[i] = (dx, dy)
-    for i, v in enumerate(result):
-        if v is None:
-            result[i] = (cw / 2, ch / 2)
-    return result
-
-
-# ── Glacier packing ────────────────────────────────────────────────────────────
-
-def _glacier_css(items, css_scale, cw=CANVAS_W, ch=CANVAS_H, rows_out=None):
-    """
-    Glacier packing. Yields (i, cx, cy) for every item, or nothing on failure.
-    If rows_out is a list, appends (y_top, row_h, [item_indices]) per row.
-    """
-    n = len(items)
-    placed = [False] * n
-    queue  = sorted(range(n), key=lambda i: -items[i]['span_lat'])
-
-    positions = {}
-    y_cursor  = OUTER_CSS
-
-    while queue:
-        placed_before = set(positions)
-
-        # ── Select items for this shelf row (greedy, tallest first) ──────────
-        row_indices, leftover = [], []
-        used_w = OUTER_CSS
-        for i in queue:
-            iw, _ = _css_size(items[i], css_scale)
-            if not row_indices or used_w + iw + PADDING_CSS <= cw - OUTER_CSS:
-                row_indices.append(i)
-                used_w += iw + PADDING_CSS
-            else:
-                leftover.append(i)
-
-        if not row_indices:
-            break
-
-        row_h = max(_css_size(items[i], css_scale)[1] for i in row_indices)
-        if y_cursor + row_h + OUTER_CSS > ch:
-            break
-
-        # ── Mountain-order within row, bottom-aligned ─────────────────────
-        mountain = _mountain(sorted(row_indices, key=lambda i: -items[i]['span_lat']))
-        total_row_w = (sum(_css_size(items[i], css_scale)[0] for i in mountain)
-                       + PADDING_CSS * (len(mountain) - 1))
-        x_left  = (cw - total_row_w) / 2
-        x_right = x_left + total_row_w
-
-        x = x_left
-        item_positions = []   # (idx, x_left, width, height)
-        for i in mountain:
-            iw, ih = _css_size(items[i], css_scale)
-            positions[i] = (x + iw / 2, y_cursor + row_h - ih / 2)
-            placed[i] = True
-            item_positions.append((i, x, iw, ih))
-            x += iw + PADDING_CSS
-
-        # ── Glacier fill: inside-out, one pass per side ───────────────────
-        candidates = [i for i in leftover if not placed[i]]
-
-        for side in ('left', 'right'):
-            edge_items = item_positions if side == 'left' else list(reversed(item_positions))
-
-            all_boxes = []
-            cum_w, max_h = 0, 0
-            for k, (_, _, w_k, h_k) in enumerate(edge_items):
-                cum_w += w_k + (PADDING_CSS if k < len(edge_items) - 1 else 0)
-                max_h  = max(max_h, h_k)
-                box_h  = row_h - max_h
-                if box_h >= PADDING_CSS * 2:
-                    all_boxes.append((cum_w, box_h))
-
-            available_w = all_boxes[-1][0] if all_boxes else 0
-
-            while available_w > PADDING_CSS * 2 and candidates and all_boxes:
-                boxes = [(bw, bh) for bw, bh in all_boxes if bw <= available_w]
-                if not boxes:
-                    break
-
-                best_j, best_area, best_bw = None, 0, None
-                for j in candidates:
-                    jw, jh = _css_size(items[j], css_scale)
-                    valid = [bw for bw, bh in boxes
-                             if jw + PADDING_CSS <= bw and jh + PADDING_CSS <= bh]
-                    if not valid:
-                        continue
-                    area = jw * jh
-                    if area > best_area:
-                        best_area, best_j, best_bw = area, j, max(valid)
-
-                if best_j is None:
-                    break
-
-                jw, jh = _css_size(items[best_j], css_scale)
-                cx = (x_left  + best_bw - jw / 2) if side == 'left' else \
-                     (x_right - best_bw + jw / 2)
-                positions[best_j] = (cx, y_cursor + jh / 2)
-                placed[best_j] = True
-                candidates = [i for i in candidates if i != best_j]
-                leftover   = [i for i in leftover   if i != best_j]
-                available_w = best_bw - jw - PADDING_CSS
-
-        if rows_out is not None:
-            rows_out.append((y_cursor, row_h,
-                             [i for i in positions if i not in placed_before]))
-        y_cursor += row_h + PADDING_CSS  # inter-row gap
-        queue = leftover
-
-    if len(positions) == n:
-        for i, (cx, cy) in positions.items():
-            yield i, cx, cy
-
-
-def _glacier_fits(items, css_scale, cw=CANVAS_W, ch=CANVAS_H):
-    return sum(1 for _ in _glacier_css(items, css_scale, cw, ch)) == len(items)
-
-
-def _max_glacier_scale(items, cw=CANVAS_W, ch=CANVAS_H):
+def _max_scale(items, cw=CANVAS_W, ch=CANVAS_H):
     if not items:
         return 50_000.0
     lo, hi = 1.0, 50_000.0
     for _ in range(55):
         mid = (lo + hi) / 2
-        if _glacier_fits(items, mid, cw, ch):
+        try:
+            fits = _pack(items, mid, cw, ch).bounding_box[1] <= ch
+        except ValueError:
+            fits = False
+        if fits:
             lo = mid
         else:
             hi = mid
     return lo
 
 
-def _shuffle_rows(positions, rows, seed):
-    """Shuffle row order, preserving each item's position relative to its row top."""
-    shuffled = rows[:]
-    random.Random(seed).shuffle(shuffled)
-    new_positions = list(positions)
-    y = OUTER_CSS
-    for old_y_top, row_h, indices in shuffled:
-        for i in indices:
-            old_cx, old_cy = positions[i]
-            new_positions[i] = (old_cx, y + (old_cy - old_y_top))
-        y += row_h + PADDING_CSS
-    return new_positions
-
-
-def glacier_positions(items, css_scale, cw=CANVAS_W, ch=CANVAS_H, seed=42):
-    """Pack items with glacier algorithm and shuffle row order. Returns position list."""
-    rows = []
-    result = [None] * len(items)
-    for i, cx, cy in _glacier_css(items, css_scale, cw, ch, rows_out=rows):
-        result[i] = (cx, cy)
-    for i, v in enumerate(result):
-        if v is None:
-            result[i] = (cw / 2, ch / 2)
-    if rows:
-        result = _shuffle_rows(result, rows, seed)
-    return result
+def _positions(items, css_scale, cw=CANVAS_W, ch=CANVAS_H, seed=42):
+    result = _pack(items, css_scale, cw, ch, seed=seed, shuffled=True)
+    return [p.center for p in result.placements]
 
 
 # ── Period layout ──────────────────────────────────────────────────────────────
@@ -519,8 +290,8 @@ def compute_layout(runs, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H, seed=42):
     for rank, item in enumerate(items):
         item['color'] = route_color(rank, n)
 
-    css_scale = _max_glacier_scale(items, canvas_w, canvas_h)
-    positions = glacier_positions(items, css_scale, canvas_w, canvas_h, seed=seed)
+    css_scale = _max_scale(items, canvas_w, canvas_h)
+    positions = _positions(items, css_scale, canvas_w, canvas_h, seed=seed)
 
     avg_cos = sum(r['cos_lat'] for r in items) / n
     out = []

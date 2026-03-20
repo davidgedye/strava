@@ -7,7 +7,7 @@ A personal running dashboard with three views, hosted on GitHub Pages. A daily G
 | Page | URL | Description |
 |---|---|---|
 | **Progress** | `index.html` | Weekly / monthly / yearly distance vs. goals, with fireworks on completion |
-| **Routes** | `routes.html` | Full-screen canvas of GPS route outlines, packed glacier-style, with a Deep Zoom photo background |
+| **Routes** | `routes.html` | Full-screen canvas of GPS route outlines, packed with boxcraft, with a Deep Zoom photo background |
 | **Lifetime** | `planet.html` | Cumulative lifetime distance visualisation |
 
 `routes.html` accepts a `?period=` query parameter:
@@ -24,7 +24,7 @@ The routes page auto-detects portrait vs landscape and loads the appropriate lay
 GitHub Actions (daily)
   └─ fetch-strava.sh        ← Strava API → summary JSON (week/month/year totals)
   └─ incremental_update.py  ← Strava API → per-activity history JSON + photos
-  └─ compute_layout.py      ← history/ + layouts/ → glacier-packed route layouts
+  └─ compute_layout.py      ← history/ + layouts/ → boxcraft-packed route layouts
   └─ render_dzi.py          ← photos/ → Deep Zoom Image tiles
   └─ aws s3 sync → Cloudflare R2 (strava-data bucket)
 
@@ -178,7 +178,7 @@ Inputs:
 |---|---|
 | `fetch-strava.sh` | Fetches week/month/year mileage totals from Strava API |
 | `incremental_update.py` | Adds per-activity history JSON and downloads activity photos |
-| `compute_layout.py` | Pre-computes glacier-packed route layouts for all periods |
+| `compute_layout.py` | Pre-computes boxcraft-packed route layouts for all periods |
 | `render_dzi.py` | Smart-crops activity photos to each route's bounding box aspect ratio (face-aware: mediapipe primary + OpenCV fallback), then renders Deep Zoom Image tiles for a given period |
 | `render_dzi_all.sh` | Batch-renders DZI for every period (portrait + landscape), including social and hikes |
 | `affected_periods.py` | Given a list of activity IDs and a change type, outputs the minimal set of layout and DZI periods that need recomputing |
