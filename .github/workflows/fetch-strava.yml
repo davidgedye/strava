@@ -15,10 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/checkout@v4
+        with:
+          repository: davidgedye/boxcraft
+          path: boxcraft
+
       - name: Install dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y jq libvips
-          pip install pyvips Pillow opencv-python-headless numpy mediapipe
+          pip install ./boxcraft pyvips Pillow opencv-python-headless numpy mediapipe
 
       - name: Download processed Strava data from R2
         env:
