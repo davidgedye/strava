@@ -98,7 +98,7 @@
     left: 50%;
     transform: translateX(-50%);
     min-width: 160px;
-    background: rgba(18,18,18,0.96);
+    background: rgba(52,52,54,0.97);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
     border-radius: 0 0 12px 12px;
@@ -118,6 +118,74 @@
   }
   #dropdown a:first-child { border-top: none; }
   #dropdown a:active { background: rgba(255,255,255,0.1); }
+
+  #picker {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(52,52,54,0.97);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-radius: 0 0 12px 12px;
+    overflow: hidden;
+    padding: 10px;
+    min-width: 252px;
+    user-select: none;
+    z-index: 10;
+  }
+  .picker-years {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    justify-content: flex-start;
+    padding: 2px 0;
+  }
+  .picker-btn {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+    font-size: 15px;
+    font-weight: 400;
+    letter-spacing: normal;
+    text-transform: none;
+    color: rgba(255,255,255,0.8);
+    padding: 9px 14px;
+    cursor: pointer;
+    border-radius: 7px;
+    text-align: center;
+  }
+  .picker-btn:active { background: rgba(255,255,255,0.15); }
+  .picker-btn.dim { color: rgba(255,255,255,0.22); cursor: default; }
+  .picker-months-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+  }
+  .picker-month-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+    padding-bottom: 8px;
+  }
+  .picker-back {
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
+    font-size: 20px;
+    color: rgba(255,255,255,0.5);
+    cursor: pointer;
+    padding: 2px 12px 2px 4px;
+  }
+  .picker-year-title {
+    flex: 1;
+    font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+    font-size: 15px;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.8);
+    text-align: center;
+    cursor: pointer;
+    padding: 4px 0;
+  }
 
   #title {
     flex: 1;
@@ -159,6 +227,7 @@
   <div id="title">
     <span id="title-text"></span><span id="btn-menu" class="hidden">&#9662;</span>
     <div id="dropdown"></div>
+    <div id="picker"></div>
   </div>
   <div class="nav-btn hidden" id="btn-next">Next &#8250;</div>
 </div>
@@ -273,23 +342,85 @@ function neighborPeriods(period) {
   return { prev: null, next: null };
 }
 
-const dropdown  = document.getElementById('dropdown');
-const btnMenu   = document.getElementById('btn-menu');
-const titleEl   = document.getElementById('title');
+const dropdown    = document.getElementById('dropdown');
+const btnMenu     = document.getElementById('btn-menu');
+const titleEl     = document.getElementById('title');
+const titleTextEl = document.getElementById('title-text');
+const pickerEl    = document.getElementById('picker');
 
 function closeDropdown() { dropdown.style.display = ''; }
 function openDropdown()  { dropdown.style.display = 'block'; }
+function closePicker()   { pickerEl.style.display = ''; }
 
-titleEl.addEventListener('click', e => {
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function buildPickerYears() {
+  pickerEl.innerHTML = '';
+  const grid = document.createElement('div');
+  grid.className = 'picker-years';
+  for (const y of [...index.years].reverse()) {
+    const btn = document.createElement('div');
+    btn.className = 'picker-btn';
+    btn.textContent = y;
+    btn.addEventListener('click', e => { e.stopPropagation(); buildPickerMonths(y); });
+    grid.appendChild(btn);
+  }
+  pickerEl.appendChild(grid);
+}
+
+function buildPickerMonths(year) {
+  pickerEl.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'picker-month-header';
+  const back = document.createElement('div');
+  back.className = 'picker-back';
+  back.textContent = '‹';
+  back.addEventListener('click', e => { e.stopPropagation(); buildPickerYears(); });
+  const yearTitle = document.createElement('div');
+  yearTitle.className = 'picker-year-title';
+  yearTitle.textContent = 'All ' + year;
+  yearTitle.addEventListener('click', e => { e.stopPropagation(); closePicker(); navigate(year); });
+  header.appendChild(back);
+  header.appendChild(yearTitle);
+  pickerEl.appendChild(header);
+
+  const grid = document.createElement('div');
+  grid.className = 'picker-months-grid';
+  for (let m = 1; m <= 12; m++) {
+    const key = year + '-' + String(m).padStart(2, '0');
+    const has = index.months.includes(key);
+    const btn = document.createElement('div');
+    btn.className = 'picker-btn' + (has ? '' : ' dim');
+    btn.textContent = MONTHS_SHORT[m - 1];
+    if (has) btn.addEventListener('click', e => { e.stopPropagation(); closePicker(); navigate(key); });
+    grid.appendChild(btn);
+  }
+  pickerEl.appendChild(grid);
+}
+
+function openPicker() {
+  if (!index) return;
+  closeDropdown();
+  buildPickerYears();
+  pickerEl.style.display = 'block';
+}
+
+titleTextEl.addEventListener('click', e => {
   e.stopPropagation();
-  dropdown.style.display === 'block' ? closeDropdown() : openDropdown();
+  pickerEl.style.display === 'block' ? closePicker() : openPicker();
+});
+btnMenu.addEventListener('click', e => {
+  e.stopPropagation();
+  if (dropdown.style.display === 'block') { closeDropdown(); return; }
+  closePicker();
+  openDropdown();
 });
 document.addEventListener('pointerdown', e => {
-  if (dropdown.style.display !== 'block') return;
-  if (!titleEl.contains(e.target)) closeDropdown();
+  if (!titleEl.contains(e.target)) { closeDropdown(); closePicker(); }
 });
 canvas.addEventListener('pointerdown', e => {
-  if (dropdown.style.display === 'block') closeDropdown();
+  closeDropdown(); closePicker();
 }, { capture: true });
 
 function buildDropdown() {
@@ -332,6 +463,7 @@ function updateNav() {
 
 function navigate(period) {
   closeDropdown();
+  closePicker();
   lastZoomedId = null;
   currentPeriod = period;
   history.replaceState(null, '', '?period=' + encodeURIComponent(period));
