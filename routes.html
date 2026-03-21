@@ -88,6 +88,7 @@
     font-size: 13px;
     letter-spacing: 0.06em;
     pointer-events: none;
+    z-index: 6;
   }
 
   #dropdown {
@@ -238,15 +239,18 @@ function titleFor(period) {
   if (period === 'hikes')  return 'Hikes';
   if (/^\d{4}-\d{2}$/.test(period)) {
     const [y, m] = period.split('-');
-    return MONTH_NAMES[parseInt(m) - 1] + ' ' + y + ' runs';
+    return MONTH_NAMES[parseInt(m) - 1] + ' ' + y;
   }
-  if (/^\d{4}$/.test(period)) return period + ' runs';
+  if (/^\d{4}$/.test(period)) return period;
   return period;
 }
 
 const milesHud = document.getElementById('miles-hud');
-function setMiles(totalMiles) {
-  milesHud.textContent = totalMiles ? Math.round(totalMiles).toLocaleString() + ' mi' : '';
+function setMiles(totalMiles, count) {
+  if (!totalMiles) { milesHud.textContent = ''; return; }
+  const label = currentPeriod === 'hikes' ? 'hikes' : 'runs';
+  const countPart = count ? count.toLocaleString() + ' ' + label + ', ' : '';
+  milesHud.textContent = countPart + Math.round(totalMiles).toLocaleString() + ' mi';
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────────
@@ -333,7 +337,7 @@ function navigate(period) {
   history.replaceState(null, '', '?period=' + encodeURIComponent(period));
   const cached = periodCache[cacheKey(period)];
   document.getElementById('title-text').textContent = titleFor(period);
-  setMiles(cached && cached.total_miles);
+  setMiles(cached && cached.total_miles, cached && cached.activities && cached.activities.length);
   updateNav();
   resetView();
   loadPeriod(period);
@@ -932,7 +936,7 @@ function loadPeriod(period) {
       periodData = data;
       document.getElementById('msg').style.display = 'none';
       document.getElementById('title-text').textContent = titleFor(period);
-      setMiles(data.total_miles);
+      setMiles(data.total_miles, data.activities && data.activities.length);
       const dziSrc = DZI_BASE + '/' + dziKey(period) + '/' + dziKey(period) + '.dzi';
       fetch(dziSrc, { method: 'HEAD' })
         .then(r => {

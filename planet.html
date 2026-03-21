@@ -376,7 +376,7 @@ async function main() {
     style: 'mapbox://styles/mapbox/standard',
     projection: 'globe',
     center: [flightStart.lon, flightStart.lat],
-    zoom: 4,
+    zoom: 2,
     pitch: 65,
     bearing: bearingAt(0),
   });
@@ -539,7 +539,7 @@ async function main() {
     // ── Intro flight ──────────────────────────────────────────────────────────
     const T_START      = 0;                      // start at Seattle
     const T_END        = miToDeg(totalRunMiles); // end at current running endpoint
-    const FLIGHT_ZOOM  = 4;
+    const FLIGHT_ZOOM  = 2;
     const FLIGHT_PITCH = 65;
 
     let flightId;
