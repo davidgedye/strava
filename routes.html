@@ -75,13 +75,15 @@
     -webkit-tap-highlight-color: transparent;
     user-select: none;
     vertical-align: middle;
+    position: relative;
+    top: -2px;
   }
   #btn-menu.hidden { display: none; }
   #btn-menu:active { opacity: 0.4; }
 
   #activity-name {
     position: fixed;
-    bottom: max(env(safe-area-inset-bottom, 0px), 40px);
+    bottom: max(calc(env(safe-area-inset-bottom, 0px) + 28px), 40px);
     left: 0; right: 0;
     text-align: center;
     color: rgba(255,255,255,0.85);
