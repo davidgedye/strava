@@ -1,4 +1,4 @@
-const CACHE_NAME = 'strava-v23';
+const CACHE_NAME = 'strava-v24';
 
 self.addEventListener('install', event => {
   event.waitUntil(

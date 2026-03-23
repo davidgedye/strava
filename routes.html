@@ -83,10 +83,13 @@
 
   #activity-name {
     position: fixed;
-    bottom: max(calc(env(safe-area-inset-bottom, 0px) + 28px), 40px);
-    left: 0; right: 0;
-    text-align: center;
-    color: rgba(255,255,255,0.85);
+    top: 0; left: 0;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    background: rgba(0,0,0,0.55);
+    border-radius: 10px;
+    padding: 3px 10px;
+    color: rgba(255,255,255,0.9);
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
     font-size: 14px;
     letter-spacing: 0.02em;
@@ -504,6 +507,14 @@ function setZoomedActivity(id) {
   activityNameEl.style.opacity = act ? '1' : '0';
   if (act) activityNameEl.textContent = act.name;
 }
+function positionActivityName(pxPerLayout, originX, originY) {
+  if (!lastZoomedId || !periodData) return;
+  const act = periodData.activities.find(a => String(a.id) === lastZoomedId);
+  if (!act) return;
+  const mileFontPx = Math.min(24, 9 * pxPerLayout);
+  activityNameEl.style.left = (act.dx * pxPerLayout + originX) + 'px';
+  activityNameEl.style.top  = (act.dy * pxPerLayout + originY + mileFontPx / 2 + 8) + 'px';
+}
 let animFrameId = null;
 
 function cancelAnim() {
@@ -652,6 +663,7 @@ function render(data) {
   ctx.setTransform(totalScale, 0, 0, totalScale, tx, ty);
 
   drawRoutes(data, fit * userZoom);
+  positionActivityName(fit * userZoom, ox * userZoom + userPanX, oy * userZoom + userPanY);
 }
 
 // ── OSD-driven render ─────────────────────────────────────────────────────────
@@ -686,6 +698,7 @@ function renderFromOSD() {
   ctx.setTransform(pxPerLayout * dpr, 0, 0, pxPerLayout * dpr, tx * dpr, ty * dpr);
 
   drawRoutes(periodData, pxPerLayout);
+  positionActivityName(pxPerLayout, tx, ty);
 }
 
 // ── OSD mode toggle ───────────────────────────────────────────────────────────
