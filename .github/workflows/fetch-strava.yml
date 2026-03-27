@@ -52,14 +52,17 @@ jobs:
           gh secret set STRAVA_REFRESH_TOKEN --body "${{ steps.fetch.outputs.NEW_REFRESH_TOKEN }}"
 
       - name: Update history data
+        id: update
         env:
           ACCESS_TOKEN: ${{ steps.fetch.outputs.ACCESS_TOKEN }}
         run: python3 incremental_update.py data/history
 
       - name: Compute route layouts
+        if: steps.update.outputs.new_activities == 'true'
         run: python3 compute_layout.py data/history data/layouts
 
       - name: Render DZI for current periods
+        if: steps.update.outputs.new_activities == 'true'
         run: |
           YEAR=$(date +%Y)
           MONTH=$(date +%Y-%m)
@@ -99,6 +102,7 @@ jobs:
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
 
       - name: Upload data to R2
+        if: steps.update.outputs.new_activities == 'true'
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
