@@ -265,13 +265,7 @@ def main():
     new_activities = [a for a in recent if str(a['id']) not in activity_index]
     print(f'New activities to add: {len(new_activities)}')
 
-    has_new = bool(new_activities)
-    github_output = os.environ.get('GITHUB_OUTPUT')
-    if github_output:
-        with open(github_output, 'a') as f:
-            f.write(f'new_activities={"true" if has_new else "false"}\n')
-
-    if not has_new:
+    if not new_activities:
         print('Nothing to do.')
         return
 
