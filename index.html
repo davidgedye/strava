@@ -81,8 +81,7 @@
   }
 
   .delta-ahead  { color: #4ade80; }
-  .delta-close  { color: #facc15; }
-  .delta-behind { color: #f87171; }
+  .delta-behind { color: #fb923c; }
 
   .distance-row {
     font-size: 0.95rem;
@@ -121,8 +120,7 @@
   }
 
   .bar-ahead  { background: #4ade80; }
-  .bar-close  { background: #facc15; }
-  .bar-behind { background: #f87171; }
+  .bar-behind { background: #fb923c; }
 
   .stats-row {
     display: flex;
@@ -244,18 +242,15 @@ window.addEventListener('pageshow', e => { if (e.persisted) location.reload(); }
   const daysInYear = Math.floor((yearEnd - yearStart) / 86400000);
   const yearFraction = dayOfYear / daysInYear;
 
-  function paceClass(delta, goal) {
-    const ratio = delta / Math.max(goal, 0.01);
-    if (ratio >= -0.02) return "ahead";
-    if (ratio >= -0.10) return "close";
-    return "behind";
+  function paceClass(delta) {
+    return delta >= 0 ? "ahead" : "behind";
   }
 
   function renderCard(title, distanceMi, goalMi, fraction, period) {
     const pct = Math.min((distanceMi / goalMi) * 100, 100);
     const expectedMi = goalMi * fraction;
     const delta = distanceMi - expectedMi;
-    const pace = paceClass(delta, goalMi);
+    const pace = paceClass(delta);
 
     const sign = delta >= 0 ? "+" : "";
     const deltaLabel = delta >= 0 ? "ahead of pace" : "behind pace";
