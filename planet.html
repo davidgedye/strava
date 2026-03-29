@@ -525,16 +525,13 @@ async function main() {
       map.getSource('remain').setData(buildRemain(angH));
     });
 
-    const first  = summary.years[0].year;
-    const last   = summary.years[summary.years.length - 1].year;
+    const totalRunCount = summary.years.reduce((s, y) => s + (y.run_count || 0), 0);
     const hudEl  = document.getElementById('hud');
-    const hudBase = `${Math.round(totalRunMiles).toLocaleString()} mi · ${first}–${last}`;
 
     function updateHud() {
-      hudEl.textContent = `${hudBase}   zoom ${map.getZoom().toFixed(2)}`;
+      hudEl.textContent = `${totalRunCount.toLocaleString()} runs · ${Math.round(totalRunMiles).toLocaleString()} mi`;
     }
     updateHud();
-    map.on('zoom', updateHud);
 
     // ── Intro flight ──────────────────────────────────────────────────────────
     const T_START      = 0;                      // start at Seattle
