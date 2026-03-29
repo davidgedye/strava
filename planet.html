@@ -297,33 +297,6 @@ function buildRemain(angH) {
 // These are populated in main() and referenced by the builders above.
 let runSegs, yearDivMi, monDivMi, totalRunMiles;
 
-// ── URL hash camera state ─────────────────────────────────────────────────────
-
-function cameraFromHash() {
-  const h = location.hash.slice(1);
-  if (!h) return null;
-  const parts = h.split('/');
-  if (parts.length < 3) return null;
-  const zoom    = parseFloat(parts[0]);
-  const lat     = parseFloat(parts[1]);
-  const lng     = parseFloat(parts[2]);
-  const bearing = parseFloat(parts[3]) || 0;
-  const pitch   = parseFloat(parts[4]) || 0;
-  if (isNaN(zoom) || isNaN(lat) || isNaN(lng)) return null;
-  return { center: [lng, lat], zoom, bearing, pitch };
-}
-
-let _hashTimer;
-function updateHash() {
-  clearTimeout(_hashTimer);
-  _hashTimer = setTimeout(() => {
-    const c = map.getCenter();
-    history.replaceState(null, '', '#' +
-      [map.getZoom().toFixed(2), c.lat.toFixed(4), c.lng.toFixed(4),
-       map.getBearing().toFixed(1), map.getPitch().toFixed(1)].join('/'));
-  }, 500);
-}
-
 async function main() {
   // 1 ── Year totals
   const DATA_BASE = 'https://pub-235ce3251fcb4a3091c119ca67daa0d9.r2.dev';
@@ -398,17 +371,14 @@ async function main() {
   const initialZoom = Math.log2(0.8 * minDim * Math.PI / 512);
   const flightStart = arcToLatLon(0);
 
-  const savedCamera = cameraFromHash();
-  const skipFlight  = !!savedCamera;
-
   map = new mapboxgl.Map({
     container: 'map',
     style: 'mapbox://styles/mapbox/standard',
     projection: 'globe',
-    center:  savedCamera ? savedCamera.center  : [flightStart.lon, flightStart.lat],
-    zoom:    savedCamera ? savedCamera.zoom    : 2,
-    pitch:   savedCamera ? savedCamera.pitch   : 65,
-    bearing: savedCamera ? savedCamera.bearing : bearingAt(0),
+    center: [flightStart.lon, flightStart.lat],
+    zoom: 2,
+    pitch: 65,
+    bearing: bearingAt(0),
   });
 
   map.addControl(new mapboxgl.NavigationControl({ showZoom: false, visualizePitch: true }), 'bottom-right');
@@ -437,9 +407,9 @@ async function main() {
   map.on('style.load', () => {
     document.getElementById('loading').style.display = 'none';
 
-    // Fade in intro text (deferred so the transition fires) — skip if restoring from URL
+    // Fade in intro text (deferred so the transition fires)
     const introTextEl = document.getElementById('intro-text');
-    if (!skipFlight) requestAnimationFrame(() => { introTextEl.style.opacity = '1'; });
+    requestAnimationFrame(() => { introTextEl.style.opacity = '1'; });
 
     // Fade out as pitch approaches 0 — covers both natural finish and interruption
     map.on('pitch', () => {
@@ -590,44 +560,37 @@ async function main() {
       map.setLayerZoomRange('year-labels', 0, MON_ZOOM);
       map.off('mousedown', interruptFlight);
       map.off('touchstart', interruptFlight);
-      if (!skipFlight) {
-        if (userInterrupted) {
-          // Stay where we are — just level out pitch/bearing so the user can explore freely
-          map.easeTo({ bearing: 0, pitch: 0, duration: 800 });
-        } else {
-          map.flyTo({
-            center:   [curMonMidPt.lon, curMonMidPt.lat],
-            zoom:     5.5,
-            bearing:  0,
-            pitch:    0,
-            duration: 2000,
-          });
-        }
+      if (userInterrupted) {
+        // Stay where we are — just level out pitch/bearing so the user can explore freely
+        map.easeTo({ bearing: 0, pitch: 0, duration: 800 });
+      } else {
+        map.flyTo({
+          center:   [curMonMidPt.lon, curMonMidPt.lat],
+          zoom:     5.5,
+          bearing:  0,
+          pitch:    0,
+          duration: 2000,
+        });
       }
-      map.on('moveend', updateHash);
     }
 
     function interruptFlight() { finishFlight(true); }
 
-    if (skipFlight) {
-      finishFlight(false);
-    } else {
-      map.setPaintProperty('month-dividers', 'line-opacity', 0);
-      map.setLayoutProperty('month-labels', 'visibility', 'none');
-      map.setLayerZoomRange('year-labels', 0, 24);
-      map.on('mousedown', interruptFlight);
-      map.on('touchstart', interruptFlight);
+    map.setPaintProperty('month-dividers', 'line-opacity', 0);
+    map.setLayoutProperty('month-labels', 'visibility', 'none');
+    map.setLayerZoomRange('year-labels', 0, 24);
+    map.on('mousedown', interruptFlight);
+    map.on('touchstart', interruptFlight);
 
-      const flightT0 = performance.now();
-      (function frame(now) {
-        const raw  = Math.min(1, (now - flightT0) / 30000);
-        const ease = 0.5 * (1 - Math.cos(Math.PI * raw));
-        const t    = T_START + (T_END - T_START) * ease;
-        map.jumpTo({ center: [arcToLatLon(t).lon, arcToLatLon(t).lat], bearing: bearingAt(t), pitch: FLIGHT_PITCH, zoom: FLIGHT_ZOOM });
-        if (raw < 1) { flightId = requestAnimationFrame(frame); }
-        else { finishFlight(false); }
-      })(performance.now());
-    }
+    const flightT0 = performance.now();
+    (function frame(now) {
+      const raw  = Math.min(1, (now - flightT0) / 30000);
+      const ease = 0.5 * (1 - Math.cos(Math.PI * raw));
+      const t    = T_START + (T_END - T_START) * ease;
+      map.jumpTo({ center: [arcToLatLon(t).lon, arcToLatLon(t).lat], bearing: bearingAt(t), pitch: FLIGHT_PITCH, zoom: FLIGHT_ZOOM });
+      if (raw < 1) { flightId = requestAnimationFrame(frame); }
+      else { finishFlight(false); }
+    })(performance.now());
   });
 
   map.on('error', e => console.warn('Map error:', e.error?.message ?? e));
