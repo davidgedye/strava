@@ -320,6 +320,12 @@ let viewer     = null;
 const params = new URLSearchParams(location.search);
 let currentPeriod = params.get('period') || 'week';
 
+// ── Current period helpers (computed from device clock, not stale server data) ─
+const _now = new Date();
+const CURRENT_MONTH = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}`;
+const CURRENT_YEAR  = String(_now.getFullYear());
+
+
 // ── Title ─────────────────────────────────────────────────────────────────────
 const MONTH_NAMES = ['January','February','March','April','May','June',
                      'July','August','September','October','November','December'];
@@ -352,7 +358,8 @@ function neighborPeriods(period) {
   if (/^\d{4}-\d{2}$/.test(period)) {
     const list = index.months;
     const i = list.indexOf(period);
-    return { prev: i >= 0 && i + 1 < list.length ? list[i + 1] : null,
+    if (i < 0) return { prev: list[0] || null, next: null }; // not in list yet (e.g. empty new month)
+    return { prev: i + 1 < list.length ? list[i + 1] : null,
              next: i > 0 ? list[i - 1] : null };
   }
   if (/^\d{4}$/.test(period)) {
@@ -449,8 +456,8 @@ function buildDropdown() {
   dropdown.innerHTML = '';
   const items = [
     { label: 'Progress',     href: 'index.html' },
-    { label: 'This Month',   period: index && index.current_month },
-    { label: 'This Year',    period: index && index.current_year },
+    { label: 'This Month',   period: CURRENT_MONTH },
+    { label: 'This Year',    period: CURRENT_YEAR },
     { label: 'Lifetime',     href: 'planet.html' },
     { label: 'With Friends', period: 'social' },
     { label: 'Hikes',        period: 'hikes' },
@@ -1126,7 +1133,9 @@ function loadPeriod(period) {
         .catch(() => { setOSDMode(false); render(data); });
     })
     .catch(err => {
-      document.getElementById('msg').textContent = 'Could not load routes.';
+      const isMonth = /^\d{4}-\d{2}$/.test(period);
+      document.getElementById('msg').textContent =
+        isMonth ? 'No runs this month yet.' : 'Could not load routes.';
       console.error(err);
     });
 }
@@ -1136,8 +1145,8 @@ fetch(LAYOUTS_BASE + '/index.json')
   .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
   .then(data => {
     index = data;
-    if (currentPeriod === 'month') currentPeriod = index.current_month;
-    if (currentPeriod === 'year')  currentPeriod = index.current_year;
+    if (currentPeriod === 'month') currentPeriod = CURRENT_MONTH;
+    if (currentPeriod === 'year')  currentPeriod = CURRENT_YEAR;
     document.getElementById('title-text').textContent = titleFor(currentPeriod);
     updateNav();
     loadPeriod(currentPeriod);

@@ -3,14 +3,73 @@ name: Fetch Strava Data
 
 on:
   schedule:
-    - cron: "0 21 * * *"  # 1pm Pacific (approx)
+    - cron: "50 20 * * *"  # 12:50pm Pacific (approx, PST=UTC-8)
+    - cron: "0 2 * * *"   # 6pm Pacific (approx, PST=UTC-8)
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      new_activities: ${{ steps.check.outputs.new_activities }}
+    steps:
+      - name: Check for new Strava activities
+        id: check
+        env:
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          TOKEN_RESPONSE=$(curl -sf -X POST "https://www.strava.com/oauth/token" \
+            -d "client_id=$STRAVA_CLIENT_ID" \
+            -d "client_secret=$STRAVA_CLIENT_SECRET" \
+            -d "grant_type=refresh_token" \
+            -d "refresh_token=$STRAVA_REFRESH_TOKEN")
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+          NEW_REFRESH_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.refresh_token')
+
+          if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
+            echo "Error: Failed to obtain access token" >&2
+            exit 1
+          fi
+
+          if [[ "$NEW_REFRESH_TOKEN" != "$STRAVA_REFRESH_TOKEN" && "$NEW_REFRESH_TOKEN" != "null" ]]; then
+            echo "new_refresh_token=$NEW_REFRESH_TOKEN" >> "$GITHUB_OUTPUT"
+          fi
+
+          KNOWN_IDS=$(aws s3 cp s3://strava-data/data/history/activity-index.json - \
+            --endpoint-url "$R2_ENDPOINT" 2>/dev/null | jq -r 'keys[]' || true)
+
+          RECENT_IDS=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "https://www.strava.com/api/v3/athlete/activities?per_page=5" | jq -r '.[].id | tostring')
+
+          NEW_ACTIVITIES=false
+          while IFS= read -r id; do
+            if [[ -n "$id" ]] && ! echo "$KNOWN_IDS" | grep -qx "$id"; then
+              NEW_ACTIVITIES=true
+              break
+            fi
+          done <<< "$RECENT_IDS"
+
+          echo "new_activities=$NEW_ACTIVITIES" >> "$GITHUB_OUTPUT"
+          echo "New activities found: $NEW_ACTIVITIES"
+
+      - name: Update refresh token secret if rotated
+        if: steps.check.outputs.new_refresh_token
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh secret set STRAVA_REFRESH_TOKEN --body "${{ steps.check.outputs.new_refresh_token }}"
+
   fetch:
+    needs: check
+    if: needs.check.outputs.new_activities == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,13 +103,6 @@ jobs:
           STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
           STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
         run: bash fetch-strava.sh
-
-      - name: Update refresh token secret if rotated
-        if: steps.fetch.outputs.NEW_REFRESH_TOKEN
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          gh secret set STRAVA_REFRESH_TOKEN --body "${{ steps.fetch.outputs.NEW_REFRESH_TOKEN }}"
 
       - name: Update history data
         env:
