@@ -358,7 +358,8 @@ function neighborPeriods(period) {
   if (/^\d{4}-\d{2}$/.test(period)) {
     const list = index.months;
     const i = list.indexOf(period);
-    return { prev: i >= 0 && i + 1 < list.length ? list[i + 1] : null,
+    if (i < 0) return { prev: list[0] || null, next: null }; // not in list yet (e.g. empty new month)
+    return { prev: i + 1 < list.length ? list[i + 1] : null,
              next: i > 0 ? list[i - 1] : null };
   }
   if (/^\d{4}$/.test(period)) {
