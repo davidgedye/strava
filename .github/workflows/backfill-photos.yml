@@ -27,6 +27,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: davidgedye/boxcraft
+          ref: v0.2.0
           path: boxcraft
 
       - name: Install dependencies
