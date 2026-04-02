@@ -46,7 +46,7 @@ The git repo contains only code — no data files are committed.
 
 ## Daily Workflow
 
-The `fetch-strava.yml` workflow runs at ~1 pm Pacific and does the following:
+The `update-if-new.yml` workflow runs twice daily (12:50pm and 6pm Pacific) and does the following:
 
 1. **Download** `history/`, `layouts/`, and `photos/` from R2
 2. **Fetch** current week/month/year summaries via `fetch-strava.sh`

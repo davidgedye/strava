@@ -1,5 +1,5 @@
-name: Fetch Strava Data
-# Fetches running data from Strava API daily
+name: Update If New
+# Checks for new Strava activities twice daily; if found, fetches, processes, and publishes them
 
 on:
   schedule:
