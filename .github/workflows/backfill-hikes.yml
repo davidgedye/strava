@@ -22,16 +22,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/checkout@v4
-        with:
-          repository: davidgedye/boxcraft
-          ref: v0.2.0
-          path: boxcraft
-
       - name: Install dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y jq libvips
-          pip install ./boxcraft pyvips Pillow opencv-python-headless numpy mediapipe
+          pip install git+https://github.com/davidgedye/boxcraft.git@v0.2.0 pyvips Pillow opencv-python-headless numpy mediapipe
 
       - name: Download data from R2
         env:
