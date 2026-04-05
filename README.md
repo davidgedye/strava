@@ -1,6 +1,6 @@
 # Strava Running Dashboard
 
-A personal running dashboard with three views, hosted on GitHub Pages. A daily GitHub Action pulls data from the Strava API, processes it, and uploads everything to Cloudflare R2. The HTML/JS is served from GitHub Pages; all data is fetched from R2 at runtime. There is no backend.
+A personal running dashboard, hosted on GitHub Pages. A daily GitHub Action pulls data from the Strava API, processes it, and uploads everything to Cloudflare R2. The HTML/JS is served from GitHub Pages; all data is fetched from R2 at runtime. There is no backend.
 
 ## Pages
 
@@ -15,6 +15,7 @@ A personal running dashboard with three views, hosted on GitHub Pages. A daily G
 - `YYYY-MM` — a specific month
 - `YYYY` — a full year
 - `social` — runs inferred to have been done with other people
+- `hikes` — all hikes, walks, and snowshoes
 
 The routes page auto-detects portrait vs landscape and loads the appropriate layout.
 
@@ -52,7 +53,7 @@ The `update-if-new.yml` workflow runs three times daily (10am, noon, and 6pm PST
 2. **Fetch** current week/month/year summaries via `fetch-strava.sh`
 3. **Update history** — `incremental_update.py` adds JSON for any new activities and downloads their photos
 4. **Compute layouts** — `compute_layout.py` regenerates layouts for the current week/month/year (historical periods are cached)
-5. **Render DZI** — `render_dzi.py` smart-crops each activity photo to the aspect ratio of its route's bounding box, then renders Deep Zoom tiles (512 px tiles, 1 px overlap) for the current week/month/year; the social DZI is only re-rendered if the friend count changed
+5. **Render DZI** — `render_dzi.py` smart-crops each activity photo to the aspect ratio of its route's bounding box, then renders Deep Zoom tiles (512 px tiles, 1 px overlap) for the current week/month/year; the social DZI is only re-rendered if the friend count changed; the hikes DZI is only re-rendered if the hike count changed
 
    **Face-aware cropping:** two detectors are tried in order:
    - **mediapipe** (primary) — handles sunglasses, hats, non-frontal angles; confidence scores 0–1
@@ -126,7 +127,7 @@ Edit `goals.json` to whatever your weekly, monthly and yearly goals are, e.g.
 
 ### 7. First run
 
-Trigger the workflow manually: **Actions → Fetch Strava Data → Run workflow**. After that it runs automatically once daily.
+Trigger the workflow manually: **Actions → Update If New → Run workflow**. After that it runs automatically once daily.
 
 Your dashboard will be at `https://<username>.github.io/<repo>/`.
 
@@ -162,7 +163,7 @@ Inputs:
 
 The workflow automatically determines which periods are affected, downloads only the necessary data, recomputes layouts (skipped for `photo`), re-renders DZI tiles, and uploads the results.
 
-### Backfill
+### Backfill Activities & Photos
 
 If there are gaps in history (e.g. the workflow wasn't running for a period), use the **Backfill Activities & Photos** workflow:
 
@@ -171,6 +172,27 @@ If there are gaps in history (e.g. the workflow wasn't running for a period), us
 Inputs:
 - `since` — fetch all activities on or after this date (`YYYY-MM-DD`)
 - `rerender_all` — re-render DZI for every historical period (slow, ~2 hours); leave unchecked to only re-render current week/month/year
+
+### Backfill Hikes
+
+Fetches any hike/walk/snowshoe activities since a given date via the API, recomputes the hikes layout, and re-renders hikes DZI (portrait + landscape). Useful after the initial ZIP import or when hike data has gaps.
+
+**Actions → Backfill Hikes → Run workflow**
+
+Inputs:
+- `since` — fetch all hike-type activities on or after this date (`YYYY-MM-DD`)
+
+### Re-render All DZI
+
+Re-renders DZI tiles for every period (all years, months, week, social, hikes — portrait + landscape) using the current `render_dzi.py`. Use this after changing crop or rendering logic.
+
+**Actions → Re-render All DZI → Run workflow**
+
+No inputs required.
+
+## PWA / Home Screen
+
+The dashboard is installable as a Progressive Web App. On iOS/Android, use "Add to Home Screen" for a full-screen, app-like experience. `manifest.json` declares the app name and icons; `sw.js` provides a network-first service worker so the shell loads offline and updates reliably after deploys.
 
 ## Key Scripts
 
@@ -184,3 +206,4 @@ Inputs:
 | `affected_periods.py` | Given a list of activity IDs and a change type, outputs the minimal set of layout and DZI periods that need recomputing |
 | `backfill_activities.py` | Fetches missing activities and photos since a given date |
 | `extract_photos.py` | One-time: extracts photos from a Strava data export ZIP |
+| `fetch_missing_photos.py` | Fetches photos for any history activity that is missing one (use sparingly — hits Strava rate limits) |
