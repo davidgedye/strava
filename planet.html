@@ -139,8 +139,6 @@ function showLoadError(msg) {
   loadingEl.appendChild(btn);
 }
 
-// Clear Mapbox tile cache (avoids IndexedDB corruption hang in iOS PWA)
-mapboxgl.clearStorage().catch(() => {});
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────────
 
