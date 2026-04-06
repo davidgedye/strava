@@ -80,6 +80,7 @@
     #loading {
       position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
       color: #555; font: 14px sans-serif; background: #000; z-index: 100;
+      flex-direction: column; gap: 16px; padding: 32px; text-align: center;
     }
     #intro-text {
       position: fixed;
@@ -104,7 +105,7 @@
 <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('/strava/sw.js');</script>
 </head>
 <body>
-  <div id="loading">Loading…</div>
+  <div id="loading"><span id="loading-msg">Loading…</span></div>
   <div id="title-strip">
     <div id="title">
       <span id="btn-menu">&#9662;</span><span>Lifetime Miles</span>
@@ -126,6 +127,20 @@
 'use strict';
 
 mapboxgl.accessToken = 'pk.eyJ1IjoiZGF2aWRnZWR5ZSIsImEiOiJjbWtvejk5bWkwYnBxM3JxNTE0ZjN6ZmowIn0.CaVScVkAo9uhpyebGqaQNg';
+
+function showLoadError(msg) {
+  const loadingEl = document.getElementById('loading');
+  if (!loadingEl || loadingEl.style.display === 'none') return;
+  document.getElementById('loading-msg').textContent = msg;
+  const btn = document.createElement('button');
+  btn.textContent = 'Retry';
+  btn.style.cssText = 'margin-top:8px;padding:10px 24px;background:#333;color:#fff;border:none;border-radius:8px;font-size:15px;cursor:pointer';
+  btn.onclick = () => location.reload();
+  loadingEl.appendChild(btn);
+}
+
+// Clear Mapbox tile cache (avoids IndexedDB corruption hang in iOS PWA)
+mapboxgl.clearStorage().catch(() => {});
 
 // ── CONFIG ─────────────────────────────────────────────────────────────────────
 
@@ -371,6 +386,9 @@ async function main() {
   const initialZoom = Math.log2(0.8 * minDim * Math.PI / 512);
   const flightStart = arcToLatLon(0);
 
+  // Show an error if style.load hasn't fired within 20s (e.g. token rejected, WebGL failure)
+  const loadTimeout = setTimeout(() => showLoadError('Map failed to load — check connection and try again'), 20000);
+
   map = new mapboxgl.Map({
     container: 'map',
     style: 'mapbox://styles/mapbox/standard',
@@ -404,7 +422,14 @@ async function main() {
     a.addEventListener('click', e => e.stopPropagation());
   });
 
+  map.on('error', e => {
+    const msg = e.error?.message ?? String(e);
+    console.warn('Map error:', msg);
+    showLoadError('Map error: ' + msg);
+  });
+
   map.on('style.load', () => {
+    clearTimeout(loadTimeout);
     document.getElementById('loading').style.display = 'none';
 
     // Fade in intro text (deferred so the transition fires)
@@ -590,11 +615,10 @@ async function main() {
     })(performance.now());
   });
 
-  map.on('error', e => console.warn('Map error:', e.error?.message ?? e));
 }
 
 main().catch(err => {
-  document.getElementById('loading').textContent = 'Error: ' + err.message;
+  showLoadError('Error: ' + err.message);
   console.error(err);
 });
   </script>
