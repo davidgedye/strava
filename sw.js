@@ -1,12 +1,12 @@
-const CACHE_NAME = 'strava-v28';
+const CACHE_NAME = 'strava-v29';
 
 self.addEventListener('install', event => {
   event.waitUntil(
     caches.open(CACHE_NAME).then(cache => cache.addAll([
-      '/strava/',
-      '/strava/index.html',
-      '/strava/routes.html',
-      '/strava/planet.html',
+      '/',
+      '/index.html',
+      '/routes.html',
+      '/planet.html',
     ]))
   );
   self.skipWaiting();
