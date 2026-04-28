@@ -89,7 +89,6 @@ jobs:
           mkdir -p data/history data/layouts data/photos data/dzi
           aws s3 sync s3://strava-data/data/history/ data/history/ --endpoint-url "$R2_ENDPOINT"
           aws s3 sync s3://strava-data/data/layouts/ data/layouts/ --endpoint-url "$R2_ENDPOINT"
-          aws s3 sync s3://strava-data/data/photos/  data/photos/  --endpoint-url "$R2_ENDPOINT"
 
       - name: Fetch fresh Strava data
         id: fetch
@@ -107,6 +106,85 @@ jobs:
       - name: Compute route layouts
         run: python3 compute_layout.py data/history data/layouts
 
+      - name: Download photos for DZI periods
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: |
+          python3 - <<'PYEOF'
+          import datetime, json, os, subprocess
+          from concurrent.futures import ThreadPoolExecutor
+
+          R2_ENDPOINT = os.environ['R2_ENDPOINT']
+          now         = datetime.datetime.now()
+          year_key    = str(now.year)
+          month_key   = now.strftime('%Y-%m')
+
+          dzi_periods = [year_key, month_key, 'week']
+
+          def r2_get_field(layout_key, field):
+              r = subprocess.run(
+                  ['aws', 's3', 'cp', f's3://strava-data/data/layouts/{layout_key}.json', '-',
+                   '--endpoint-url', R2_ENDPOINT],
+                  capture_output=True, text=True)
+              if r.returncode != 0:
+                  return -1
+              try:
+                  return json.loads(r.stdout).get(field, -1)
+              except Exception:
+                  return -1
+
+          # Check social
+          new_fc = json.load(open('data/layouts/social.json')).get('friend_count', 0)
+          old_fc = r2_get_field('social', 'friend_count')
+          render_social = new_fc != old_fc
+          print(f'Social friend_count: old={old_fc} new={new_fc} → render={render_social}')
+          if render_social:
+              dzi_periods.append('social')
+
+          # Check hikes
+          try:
+              new_hc = json.load(open('data/layouts/hikes.json')).get('hike_count', 0)
+          except FileNotFoundError:
+              new_hc = 0
+          old_hc = r2_get_field('hikes', 'hike_count')
+          render_hikes = new_hc != old_hc
+          print(f'Hikes hike_count: old={old_hc} new={new_hc} → render={render_hikes}')
+          if render_hikes:
+              dzi_periods.append('hikes')
+
+          # Pass render decisions to subsequent steps
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f'RENDER_SOCIAL={"true" if render_social else "false"}\n')
+              f.write(f'RENDER_HIKES={"true" if render_hikes else "false"}\n')
+
+          # Collect photo IDs from portrait layout files (same IDs as landscape)
+          photo_ids = set()
+          for period in dzi_periods:
+              layout_file = f'data/layouts/{period}.json'
+              if os.path.exists(layout_file):
+                  for act in json.load(open(layout_file)).get('activities', []):
+                      photo_ids.add(str(act['id']))
+
+          print(f'Downloading up to {len(photo_ids)} photos for periods: {dzi_periods}')
+
+          def download(photo_id):
+              out = f'data/photos/{photo_id}.jpg'
+              if os.path.exists(out):
+                  return  # already fetched by incremental_update
+              subprocess.run(
+                  ['aws', 's3', 'cp', f's3://strava-data/data/photos/{photo_id}.jpg', out,
+                   '--endpoint-url', R2_ENDPOINT],
+                  capture_output=True)
+
+          with ThreadPoolExecutor(max_workers=20) as pool:
+              pool.map(download, photo_ids)
+
+          downloaded = sum(1 for pid in photo_ids if os.path.exists(f'data/photos/{pid}.jpg'))
+          print(f'Downloaded {downloaded}/{len(photo_ids)} photos.')
+          PYEOF
+
       - name: Render DZI for current periods
         run: |
           YEAR=$(date +%Y)
@@ -116,12 +194,7 @@ jobs:
             python3 render_dzi.py --period "$PERIOD" --photos-dir data/photos --landscape
           done
 
-          # Re-render social DZI only if friend_count changed
-          NEW_FC=$(python3 -c "import json; print(json.load(open('data/layouts/social.json')).get('friend_count', 0))")
-          OLD_FC=$(aws s3 cp s3://strava-data/data/layouts/social.json - --endpoint-url "$R2_ENDPOINT" 2>/dev/null \
-                   | python3 -c "import json,sys; print(json.load(sys.stdin).get('friend_count', -1))" 2>/dev/null || echo -1)
-          echo "Social friend_count: old=$OLD_FC new=$NEW_FC"
-          if [[ "$NEW_FC" != "$OLD_FC" ]]; then
+          if [[ "$RENDER_SOCIAL" == "true" ]]; then
             echo "friend_count changed — re-rendering social DZI"
             python3 render_dzi.py --period social --photos-dir data/photos --scale 20
             python3 render_dzi.py --period social --photos-dir data/photos --scale 15 --landscape
@@ -129,22 +202,13 @@ jobs:
             echo "friend_count unchanged — skipping social DZI render"
           fi
 
-          # Re-render hikes DZI only if hike_count changed
-          NEW_HC=$(python3 -c "import json; print(json.load(open('data/layouts/hikes.json')).get('hike_count', 0))" 2>/dev/null || echo 0)
-          OLD_HC=$(aws s3 cp s3://strava-data/data/layouts/hikes.json - --endpoint-url "$R2_ENDPOINT" 2>/dev/null \
-                   | python3 -c "import json,sys; print(json.load(sys.stdin).get('hike_count', -1))" 2>/dev/null || echo -1)
-          echo "Hikes hike_count: old=$OLD_HC new=$NEW_HC"
-          if [[ "$NEW_HC" != "$OLD_HC" ]]; then
+          if [[ "$RENDER_HIKES" == "true" ]]; then
             echo "hike_count changed — re-rendering hikes DZI"
             python3 render_dzi.py --period hikes --photos-dir data/photos --scale 20
             python3 render_dzi.py --period hikes --photos-dir data/photos --scale 15 --landscape
           else
             echo "hike_count unchanged — skipping hikes DZI render"
           fi
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
 
       - name: Upload data to R2
         env:
