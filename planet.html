@@ -596,7 +596,7 @@ async function main() {
         // Stay where we are — just level out pitch/bearing so the user can explore freely
         map.easeTo({ bearing: 0, pitch: 0, duration: 800 });
       } else {
-        // bearing and pitch already at 0 from the settle phase — nothing to do
+        map.easeTo({ zoom: 5, duration: 2500, easing: t => 1 - Math.pow(1 - t, 3) });
       }
     }
 
@@ -611,7 +611,7 @@ async function main() {
     // Flight is split: first FLY_FRAC follows the great circle to T_END;
     // last SETTLE_FRAC locks position at T_END and spins bearing→0 / pitch→0
     // so the red dot stays centered throughout.
-    const SETTLE_FRAC  = 0.18;
+    const SETTLE_FRAC  = 0.11;
     const FLY_FRAC     = 1 - SETTLE_FRAC;
     const bearingEnd   = bearingAt(T_END);
 
@@ -622,13 +622,13 @@ async function main() {
       let camT, bearing, pitch;
       if (raw <= FLY_FRAC) {
         const rawPos = raw / FLY_FRAC;
-        const ease   = 0.5 * (1 - Math.cos(Math.PI * rawPos));
+        const ease   = 0.5 * (1 - Math.cos(Math.PI * rawPos)); // ease-in-out: natural cruise feel
         camT    = T_START + (T_END - T_START) * ease;
         bearing = bearingAt(camT);
         pitch   = FLIGHT_PITCH;
       } else {
         const s    = (raw - FLY_FRAC) / SETTLE_FRAC;
-        const ease = 0.5 * (1 - Math.cos(Math.PI * s));
+        const ease = Math.sin(Math.PI / 2 * s);              // ease-out only: starts at full speed
         camT    = T_END;
         bearing = bearingEnd * (1 - ease);
         pitch   = FLIGHT_PITCH * (1 - ease);
