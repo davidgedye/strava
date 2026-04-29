@@ -453,11 +453,13 @@ async function main() {
     const angH0 = computeAngH();
 
     // ── Sources ──────────────────────────────────────────────────────────────
+    const frontierPt = arcToLatLon(miToDeg(totalRunMiles));
     map.addSource('run-fills',      { type: 'geojson', data: buildRunFills(angH0) });
     map.addSource('year-dividers',  { type: 'geojson', data: buildYearDividers(angH0) });
     map.addSource('month-dividers', { type: 'geojson', data: buildMonthDividers(angH0) });
     map.addSource('remain',         { type: 'geojson', data: buildRemain(angH0) });
     map.addSource('labels',         { type: 'geojson', data: fc(labelFeats) });
+    map.addSource('frontier',       { type: 'geojson', data: { type: 'Feature', geometry: { type: 'Point', coordinates: [frontierPt.lon, frontierPt.lat] } } });
 
     // ── Strip geometry layers (below map text labels) ─────────────────────
     // slot: 'top' renders above all map content including symbol/label layers
@@ -485,6 +487,16 @@ async function main() {
     map.addLayer({
       slot: 'top', id: 'remain-outline', type: 'line', source: 'remain',
       paint: { 'line-color': 'rgba(0,0,0,0.35)', 'line-width': 1.5, 'line-dasharray': [4, 3], 'line-emissive-strength': 1 },
+    });
+    map.addLayer({
+      slot: 'top', id: 'frontier-dot', type: 'circle', source: 'frontier',
+      paint: {
+        'circle-radius': 7,
+        'circle-color': '#ff4500',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-emissive-strength': 1,
+      },
     });
 
     // ── Label layers ──────────────────────────────────────────────────────────
@@ -584,13 +596,7 @@ async function main() {
         // Stay where we are — just level out pitch/bearing so the user can explore freely
         map.easeTo({ bearing: 0, pitch: 0, duration: 800 });
       } else {
-        map.flyTo({
-          center:   [curMonMidPt.lon, curMonMidPt.lat],
-          zoom:     5.5,
-          bearing:  0,
-          pitch:    0,
-          duration: 2000,
-        });
+        // bearing and pitch already at 0 from the settle phase — nothing to do
       }
     }
 
@@ -602,12 +608,33 @@ async function main() {
     map.on('mousedown', interruptFlight);
     map.on('touchstart', interruptFlight);
 
+    // Flight is split: first FLY_FRAC follows the great circle to T_END;
+    // last SETTLE_FRAC locks position at T_END and spins bearing→0 / pitch→0
+    // so the red dot stays centered throughout.
+    const SETTLE_FRAC  = 0.18;
+    const FLY_FRAC     = 1 - SETTLE_FRAC;
+    const bearingEnd   = bearingAt(T_END);
+
     const flightT0 = performance.now();
     (function frame(now) {
-      const raw  = Math.min(1, (now - flightT0) / 30000);
-      const ease = 0.5 * (1 - Math.cos(Math.PI * raw));
-      const t    = T_START + (T_END - T_START) * ease;
-      map.jumpTo({ center: [arcToLatLon(t).lon, arcToLatLon(t).lat], bearing: bearingAt(t), pitch: FLIGHT_PITCH, zoom: FLIGHT_ZOOM });
+      const raw = Math.min(1, (now - flightT0) / 30000);
+
+      let camT, bearing, pitch;
+      if (raw <= FLY_FRAC) {
+        const rawPos = raw / FLY_FRAC;
+        const ease   = 0.5 * (1 - Math.cos(Math.PI * rawPos));
+        camT    = T_START + (T_END - T_START) * ease;
+        bearing = bearingAt(camT);
+        pitch   = FLIGHT_PITCH;
+      } else {
+        const s    = (raw - FLY_FRAC) / SETTLE_FRAC;
+        const ease = 0.5 * (1 - Math.cos(Math.PI * s));
+        camT    = T_END;
+        bearing = bearingEnd * (1 - ease);
+        pitch   = FLIGHT_PITCH * (1 - ease);
+      }
+
+      map.jumpTo({ center: [arcToLatLon(camT).lon, arcToLatLon(camT).lat], bearing, pitch, zoom: FLIGHT_ZOOM });
       if (raw < 1) { flightId = requestAnimationFrame(frame); }
       else { finishFlight(false); }
     })(performance.now());
