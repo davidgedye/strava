@@ -44,7 +44,8 @@ def _compute_reasons(text, text_lo, has_bean):
     # ── 1. Explicit friend names ──────────────────────────────────────────────
     for n in FRIEND_NAMES:
         if re.search(r'\b' + n + r'\b', text_lo):
-            reasons.append(f'name:{n.capitalize()}')
+            if not re.search(r'\b(?:from|by|of)\s+' + n + r'\b', text_lo):
+                reasons.append(f'name:{n.capitalize()}')
 
     # ── 2. Group names / social signals ──────────────────────────────────────
     for pattern, label in _SOCIAL_PATTERNS:
