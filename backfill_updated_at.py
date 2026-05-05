@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-One-time backfill: patch photo_count into activity-index.json for the last 7 days
-so that update-if-changed.yml can immediately start detecting photo additions.
+One-time backfill: patch updated_at into activity-index.json for the last 7 days
+so that update-if-changed.yml can immediately start detecting modified activities.
+
+updated_at is only available on the detail endpoint (GET /activities/{id}),
+not the list endpoint, so we fetch each activity individually.
 
 Usage:
     ACCESS_TOKEN=<token> \
@@ -14,6 +17,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.request
 
 API_BASE = 'https://www.strava.com/api/v3'
 R2_BUCKET = 's3://strava-data'
@@ -21,7 +25,6 @@ INDEX_KEY  = 'data/history/activity-index.json'
 
 
 def api_get(path, token):
-    import urllib.request
     req = urllib.request.Request(
         f'{API_BASE}{path}',
         headers={'Authorization': f'Bearer {token}'},
@@ -54,16 +57,13 @@ def main():
     index = json.loads(raw)
     print(f'  {len(index)} entries in index')
 
-    # Fetch last 7 days from Strava
+    # Fetch last 7 days from list endpoint to get candidate IDs
     seven_days_ago = int(time.time()) - 7 * 24 * 3600
     print('Fetching last 7 days of activities from Strava...')
     recent = api_get(f'/athlete/activities?after={seven_days_ago}&per_page=200', token)
     print(f'  {len(recent)} activities returned')
-    if recent:
-        a0 = recent[0]
-        print(f'  Sample: id={a0["id"]} total_photo_count={a0.get("total_photo_count")} in_index={str(a0["id"]) in index}')
 
-    # Patch photo_count into matching index entries
+    # For each known activity, fetch detail to get updated_at
     patched = 0
     for a in recent:
         aid = str(a['id'])
@@ -72,12 +72,18 @@ def main():
         entry = index[aid]
         if not isinstance(entry, dict):
             continue
-        photo_count = a.get('total_photo_count', 0)
-        if entry.get('photo_count') != photo_count:
-            entry['photo_count'] = photo_count
-            patched += 1
+        try:
+            detail = api_get(f'/activities/{aid}', token)
+            updated_at = detail.get('updated_at', '')
+            if updated_at and entry.get('updated_at') != updated_at:
+                entry['updated_at'] = updated_at
+                patched += 1
+                print(f'  Patched {aid}: {updated_at}')
+            time.sleep(0.5)
+        except Exception as e:
+            print(f'  Warning: could not fetch detail for {aid}: {e}')
 
-    print(f'  {patched} entries patched with photo_count')
+    print(f'{patched} entries patched with updated_at')
 
     if patched == 0:
         print('Nothing to upload.')

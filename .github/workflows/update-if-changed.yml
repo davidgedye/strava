@@ -28,43 +28,77 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
         run: |
-          TOKEN_RESPONSE=$(curl -sf -X POST "https://www.strava.com/oauth/token" \
-            -d "client_id=$STRAVA_CLIENT_ID" \
-            -d "client_secret=$STRAVA_CLIENT_SECRET" \
-            -d "grant_type=refresh_token" \
-            -d "refresh_token=$STRAVA_REFRESH_TOKEN")
-          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
-          NEW_REFRESH_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.refresh_token')
+          python3 - <<'PYEOF'
+          import json, os, subprocess, sys, time, urllib.request, urllib.parse
 
-          if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
-            echo "Error: Failed to obtain access token" >&2
-            exit 1
-          fi
+          API_BASE = 'https://www.strava.com/api/v3'
 
-          if [[ "$NEW_REFRESH_TOKEN" != "$STRAVA_REFRESH_TOKEN" && "$NEW_REFRESH_TOKEN" != "null" ]]; then
-            echo "new_refresh_token=$NEW_REFRESH_TOKEN" >> "$GITHUB_OUTPUT"
-          fi
+          def api_get(path, token):
+              req = urllib.request.Request(
+                  f'{API_BASE}{path}',
+                  headers={'Authorization': f'Bearer {token}'},
+              )
+              with urllib.request.urlopen(req) as resp:
+                  return json.loads(resp.read())
 
-          ACTIVITY_INDEX=$(aws s3 cp s3://strava-data/data/history/activity-index.json - \
-            --endpoint-url "$R2_ENDPOINT" 2>/dev/null || echo '{}')
+          # OAuth token refresh
+          data = urllib.parse.urlencode({
+              'client_id':     os.environ['STRAVA_CLIENT_ID'],
+              'client_secret': os.environ['STRAVA_CLIENT_SECRET'],
+              'grant_type':    'refresh_token',
+              'refresh_token': os.environ['STRAVA_REFRESH_TOKEN'],
+          }).encode()
+          with urllib.request.urlopen('https://www.strava.com/oauth/token', data) as resp:
+              token_data = json.loads(resp.read())
 
-          SEVEN_DAYS_AGO=$(date -d '7 days ago' +%s)
-          RECENT=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
-            "https://www.strava.com/api/v3/athlete/activities?after=${SEVEN_DAYS_AGO}&per_page=200")
+          access_token = token_data.get('access_token')
+          if not access_token:
+              print('Error: Failed to obtain access token', file=sys.stderr)
+              sys.exit(1)
 
-          HAS_NEW=$(echo "$RECENT" | jq --argjson idx "$ACTIVITY_INDEX" \
-            '[.[] | select((.id | tostring) as $id | $idx[$id] == null)] | length > 0')
+          new_refresh = token_data.get('refresh_token', '')
+          old_refresh = os.environ['STRAVA_REFRESH_TOKEN']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              if new_refresh and new_refresh != old_refresh:
+                  f.write(f'new_refresh_token={new_refresh}\n')
 
-          HAS_MODIFIED=$(echo "$RECENT" | jq --argjson idx "$ACTIVITY_INDEX" \
-            '[.[] | (.id | tostring) as $id |
-              select($idx[$id] != null) |
-              select(($idx[$id].photo_count // null) != null) |
-              select(.total_photo_count > $idx[$id].photo_count)
-            ] | length > 0')
+          # Download activity index from R2
+          r = subprocess.run(
+              ['aws', 's3', 'cp', 's3://strava-data/data/history/activity-index.json', '-',
+               '--endpoint-url', os.environ['R2_ENDPOINT']],
+              capture_output=True, text=True,
+          )
+          index = json.loads(r.stdout) if r.returncode == 0 else {}
 
-          echo "new_activities=$HAS_NEW" >> "$GITHUB_OUTPUT"
-          echo "modified_activities=$HAS_MODIFIED" >> "$GITHUB_OUTPUT"
-          echo "New: $HAS_NEW  Modified: $HAS_MODIFIED"
+          # Fetch activities from the last 7 days
+          seven_days_ago = int(time.time()) - 7 * 24 * 3600
+          recent = api_get(f'/athlete/activities?after={seven_days_ago}&per_page=200', access_token)
+
+          # Check for new activities
+          has_new = any(str(a['id']) not in index for a in recent)
+
+          # Check for modifications via updated_at on the detail endpoint
+          has_modified = False
+          for a in recent:
+              aid = str(a['id'])
+              stored = index.get(aid)
+              if not stored or not stored.get('updated_at'):
+                  continue
+              try:
+                  detail = api_get(f'/activities/{aid}', access_token)
+                  time.sleep(0.3)
+                  if detail.get('updated_at') != stored['updated_at']:
+                      has_modified = True
+                      print(f'Modified: activity {aid}')
+                      break
+              except Exception as e:
+                  print(f'Warning: could not check modification for {aid}: {e}')
+
+          print(f'New: {has_new}  Modified: {has_modified}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'new_activities={"true" if has_new else "false"}\n')
+              f.write(f'modified_activities={"true" if has_modified else "false"}\n')
+          PYEOF
 
       - name: Update refresh token secret if rotated
         if: steps.check.outputs.new_refresh_token

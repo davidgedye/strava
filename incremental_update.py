@@ -82,13 +82,13 @@ def fetch_track(activity_id, token):
 
 
 def fetch_description(activity_id, token):
-    """Fetch the full activity detail to get its description."""
+    """Fetch the full activity detail; returns (description, updated_at)."""
     try:
         data = api_get(f'/activities/{activity_id}', token)
-        return data.get('description') or ''
+        return data.get('description') or '', data.get('updated_at', '')
     except Exception as e:
         print(f'  Warning: could not fetch description for {activity_id}: {e}')
-        return ''
+        return '', ''
 
 
 def fetch_photo(activity_id, token, photos_dir):
@@ -267,11 +267,18 @@ def main():
     new_activities = []
     modified_activities = []
     for a in recent:
-        stored = activity_index.get(str(a['id']))
+        aid = str(a['id'])
+        stored = activity_index.get(aid)
         if stored is None:
             new_activities.append(a)
-        elif stored.get('photo_count') is not None and a.get('total_photo_count', 0) > stored['photo_count']:
-            modified_activities.append(a)
+        elif stored.get('updated_at'):
+            try:
+                current = api_get(f'/activities/{aid}', token).get('updated_at', '')
+                time.sleep(0.5)
+                if current != stored['updated_at']:
+                    modified_activities.append(a)
+            except Exception as e:
+                print(f'  Warning: could not check modification for {aid}: {e}')
 
     print(f'New activities: {len(new_activities)}')
     print(f'Modified activities: {len(modified_activities)}')
@@ -286,9 +293,9 @@ def main():
 
     affected_months = set()
     for a, kind in [(a, 'new') for a in new_activities] + [(a, 'modified') for a in modified_activities]:
-        act   = parse_activity(a)
-        desc  = fetch_description(a['id'], token)
-        track = fetch_track(a['id'], token)
+        act                = parse_activity(a)
+        desc, updated_at   = fetch_description(a['id'], token)
+        track              = fetch_track(a['id'], token)
 
         act_dir = out_dir / str(act['year']) / f"{act['month']:02d}"
         act_dir.mkdir(parents=True, exist_ok=True)
@@ -317,7 +324,7 @@ def main():
         activity_index[act['id']] = {
             'year': act['year'],
             'month': act['month'],
-            'photo_count': a.get('total_photo_count', 0),
+            'updated_at': updated_at,
         }
         affected_months.add((act['year'], act['month']))
 
