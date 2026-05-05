@@ -1,0 +1,42 @@
+name: Backfill updated_at
+# One-time backfill: patches updated_at into activity-index.json for the last 7 days.
+# Run once to bootstrap modification detection in update-if-changed.yml.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get Strava access token
+        id: auth
+        env:
+          STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
+          STRAVA_CLIENT_SECRET: ${{ secrets.STRAVA_CLIENT_SECRET }}
+          STRAVA_REFRESH_TOKEN: ${{ secrets.STRAVA_REFRESH_TOKEN }}
+        run: |
+          TOKEN_RESPONSE=$(curl -sf -X POST "https://www.strava.com/oauth/token" \
+            -d "client_id=$STRAVA_CLIENT_ID" \
+            -d "client_secret=$STRAVA_CLIENT_SECRET" \
+            -d "grant_type=refresh_token" \
+            -d "refresh_token=$STRAVA_REFRESH_TOKEN")
+          ACCESS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token')
+          if [[ -z "$ACCESS_TOKEN" || "$ACCESS_TOKEN" == "null" ]]; then
+            echo "Error: Failed to obtain access token" >&2
+            exit 1
+          fi
+          echo "ACCESS_TOKEN=$ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
+
+      - name: Backfill updated_at in activity index
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.ACCESS_TOKEN }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+        run: python3 backfill_updated_at.py
