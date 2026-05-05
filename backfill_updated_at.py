@@ -60,6 +60,9 @@ def main():
     print('Fetching last 7 days of activities from Strava...')
     recent = api_get(f'/athlete/activities?after={seven_days_ago}&per_page=200', token)
     print(f'  {len(recent)} activities returned')
+    if recent:
+        a0 = recent[0]
+        print(f'  Sample activity id={a0["id"]} updated_at={a0.get("updated_at")} in_index={str(a0["id"]) in index}')
 
     # Patch updated_at into matching index entries
     patched = 0
