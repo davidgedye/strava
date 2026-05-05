@@ -1,5 +1,5 @@
-name: Update If New
-# Checks for new Strava activities three times daily; if found, fetches, processes, and publishes them
+name: Update If Changed
+# Checks for new or modified Strava activities three times daily; if found, fetches, processes, and publishes them
 
 on:
   schedule:
@@ -16,8 +16,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       new_activities: ${{ steps.check.outputs.new_activities }}
+      modified_activities: ${{ steps.check.outputs.modified_activities }}
     steps:
-      - name: Check for new Strava activities
+      - name: Check for new or modified Strava activities
         id: check
         env:
           STRAVA_CLIENT_ID: ${{ secrets.STRAVA_CLIENT_ID }}
@@ -44,22 +45,26 @@ jobs:
             echo "new_refresh_token=$NEW_REFRESH_TOKEN" >> "$GITHUB_OUTPUT"
           fi
 
-          KNOWN_IDS=$(aws s3 cp s3://strava-data/data/history/activity-index.json - \
-            --endpoint-url "$R2_ENDPOINT" 2>/dev/null | jq -r 'keys[]' || true)
+          ACTIVITY_INDEX=$(aws s3 cp s3://strava-data/data/history/activity-index.json - \
+            --endpoint-url "$R2_ENDPOINT" 2>/dev/null || echo '{}')
 
-          RECENT_IDS=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
-            "https://www.strava.com/api/v3/athlete/activities?per_page=5" | jq -r '.[].id | tostring')
+          SEVEN_DAYS_AGO=$(date -d '7 days ago' +%s)
+          RECENT=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
+            "https://www.strava.com/api/v3/athlete/activities?after=${SEVEN_DAYS_AGO}&per_page=200")
 
-          NEW_ACTIVITIES=false
-          while IFS= read -r id; do
-            if [[ -n "$id" ]] && ! echo "$KNOWN_IDS" | grep -qx "$id"; then
-              NEW_ACTIVITIES=true
-              break
-            fi
-          done <<< "$RECENT_IDS"
+          HAS_NEW=$(echo "$RECENT" | jq --argjson idx "$ACTIVITY_INDEX" \
+            '[.[] | select((.id | tostring) as $id | $idx[$id] == null)] | length > 0')
 
-          echo "new_activities=$NEW_ACTIVITIES" >> "$GITHUB_OUTPUT"
-          echo "New activities found: $NEW_ACTIVITIES"
+          HAS_MODIFIED=$(echo "$RECENT" | jq --argjson idx "$ACTIVITY_INDEX" \
+            '[.[] | (.id | tostring) as $id |
+              select($idx[$id] != null) |
+              select(($idx[$id].updated_at // null) != null) |
+              select(.updated_at != $idx[$id].updated_at)
+            ] | length > 0')
+
+          echo "new_activities=$HAS_NEW" >> "$GITHUB_OUTPUT"
+          echo "modified_activities=$HAS_MODIFIED" >> "$GITHUB_OUTPUT"
+          echo "New: $HAS_NEW  Modified: $HAS_MODIFIED"
 
       - name: Update refresh token secret if rotated
         if: steps.check.outputs.new_refresh_token
@@ -70,7 +75,7 @@ jobs:
 
   fetch:
     needs: check
-    if: needs.check.outputs.new_activities == 'true'
+    if: needs.check.outputs.new_activities == 'true' || needs.check.outputs.modified_activities == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

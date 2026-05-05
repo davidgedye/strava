@@ -259,13 +259,24 @@ def main():
             activity_index = json.load(f)
     print(f'Known activities: {len(activity_index)}')
 
-    # Fetch recent activities and find new ones
-    print('Fetching recent activities from Strava API...')
-    recent = api_get('/athlete/activities?per_page=5', token)
-    new_activities = [a for a in recent if str(a['id']) not in activity_index]
-    print(f'New activities to add: {len(new_activities)}')
+    # Fetch activities from the last 7 days; check for new and modified
+    seven_days_ago = int(time.time()) - 7 * 24 * 3600
+    print('Fetching activities from the last 7 days...')
+    recent = api_get(f'/athlete/activities?after={seven_days_ago}&per_page=200', token)
 
-    if not new_activities:
+    new_activities = []
+    modified_activities = []
+    for a in recent:
+        stored = activity_index.get(str(a['id']))
+        if stored is None:
+            new_activities.append(a)
+        elif stored.get('updated_at') and stored['updated_at'] != a.get('updated_at', ''):
+            modified_activities.append(a)
+
+    print(f'New activities: {len(new_activities)}')
+    print(f'Modified activities: {len(modified_activities)}')
+
+    if not new_activities and not modified_activities:
         print('Nothing to do.')
         return
 
@@ -274,7 +285,7 @@ def main():
     photos_dir.mkdir(parents=True, exist_ok=True)
 
     affected_months = set()
-    for a in new_activities:
+    for a, kind in [(a, 'new') for a in new_activities] + [(a, 'modified') for a in modified_activities]:
         act   = parse_activity(a)
         desc  = fetch_description(a['id'], token)
         track = fetch_track(a['id'], token)
@@ -295,14 +306,19 @@ def main():
 
         if a.get('total_photo_count', 0) > 0:
             photo_out = photos_dir / f'{act["id"]}.jpg'
-            if not photo_out.exists():
+            if kind == 'modified' or not photo_out.exists():
                 if fetch_photo(act['id'], token, photos_dir):
                     print(f'  → photo downloaded')
             time.sleep(0.5)
 
         social_tag = ' 👥' if act_data['with_friends'] else ''
-        print(f'  + {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi){social_tag}')
-        activity_index[act['id']] = {'year': act['year'], 'month': act['month']}
+        prefix = '+' if kind == 'new' else '~'
+        print(f'  {prefix} {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi){social_tag}')
+        activity_index[act['id']] = {
+            'year': act['year'],
+            'month': act['month'],
+            'updated_at': a.get('updated_at', ''),
+        }
         affected_months.add((act['year'], act['month']))
 
         time.sleep(0.5)   # stay well within Strava rate limits
@@ -324,7 +340,8 @@ def main():
     with open(index_file, 'w') as f:
         json.dump(activity_index, f, separators=(',', ':'))
 
-    print(f'\nDone. {len(new_activities)} new activit{"y" if len(new_activities) == 1 else "ies"} added.')
+    total = len(new_activities) + len(modified_activities)
+    print(f'\nDone. {len(new_activities)} new + {len(modified_activities)} modified activit{"y" if total == 1 else "ies"} processed.')
 
 
 if __name__ == '__main__':
