@@ -270,7 +270,7 @@ def main():
         stored = activity_index.get(str(a['id']))
         if stored is None:
             new_activities.append(a)
-        elif stored.get('updated_at') and stored['updated_at'] != a.get('updated_at', ''):
+        elif stored.get('photo_count') is not None and a.get('total_photo_count', 0) > stored['photo_count']:
             modified_activities.append(a)
 
     print(f'New activities: {len(new_activities)}')
@@ -317,7 +317,7 @@ def main():
         activity_index[act['id']] = {
             'year': act['year'],
             'month': act['month'],
-            'updated_at': a.get('updated_at', ''),
+            'photo_count': a.get('total_photo_count', 0),
         }
         affected_months.add((act['year'], act['month']))
 

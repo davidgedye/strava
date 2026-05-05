@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-One-time backfill: fetch updated_at from Strava for the last 7 days and
-patch it into the activity-index.json stored in R2.
+One-time backfill: patch photo_count into activity-index.json for the last 7 days
+so that update-if-changed.yml can immediately start detecting photo additions.
 
 Usage:
     ACCESS_TOKEN=<token> \
@@ -14,8 +14,6 @@ import os
 import subprocess
 import sys
 import time
-import urllib.request
-from datetime import datetime
 
 API_BASE = 'https://www.strava.com/api/v3'
 R2_BUCKET = 's3://strava-data'
@@ -23,6 +21,7 @@ INDEX_KEY  = 'data/history/activity-index.json'
 
 
 def api_get(path, token):
+    import urllib.request
     req = urllib.request.Request(
         f'{API_BASE}{path}',
         headers={'Authorization': f'Bearer {token}'},
@@ -62,22 +61,23 @@ def main():
     print(f'  {len(recent)} activities returned')
     if recent:
         a0 = recent[0]
-        print(f'  Sample activity id={a0["id"]} updated_at={a0.get("updated_at")} in_index={str(a0["id"]) in index}')
+        print(f'  Sample: id={a0["id"]} total_photo_count={a0.get("total_photo_count")} in_index={str(a0["id"]) in index}')
 
-    # Patch updated_at into matching index entries
+    # Patch photo_count into matching index entries
     patched = 0
     for a in recent:
         aid = str(a['id'])
-        updated_at = a.get('updated_at', '')
-        if aid in index and updated_at:
-            entry = index[aid]
-            if not isinstance(entry, dict):
-                continue
-            if entry.get('updated_at') != updated_at:
-                entry['updated_at'] = updated_at
-                patched += 1
+        if aid not in index:
+            continue
+        entry = index[aid]
+        if not isinstance(entry, dict):
+            continue
+        photo_count = a.get('total_photo_count', 0)
+        if entry.get('photo_count') != photo_count:
+            entry['photo_count'] = photo_count
+            patched += 1
 
-    print(f'  {patched} entries patched with updated_at')
+    print(f'  {patched} entries patched with photo_count')
 
     if patched == 0:
         print('Nothing to upload.')
@@ -94,7 +94,7 @@ def main():
         print(upload.stderr, file=sys.stderr)
         sys.exit(1)
 
-    print(f'Uploaded updated index. Done.')
+    print('Uploaded updated index. Done.')
 
 
 if __name__ == '__main__':

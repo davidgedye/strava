@@ -58,8 +58,8 @@ jobs:
           HAS_MODIFIED=$(echo "$RECENT" | jq --argjson idx "$ACTIVITY_INDEX" \
             '[.[] | (.id | tostring) as $id |
               select($idx[$id] != null) |
-              select(($idx[$id].updated_at // null) != null) |
-              select(.updated_at != $idx[$id].updated_at)
+              select(($idx[$id].photo_count // null) != null) |
+              select(.total_photo_count > $idx[$id].photo_count)
             ] | length > 0')
 
           echo "new_activities=$HAS_NEW" >> "$GITHUB_OUTPUT"
