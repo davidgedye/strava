@@ -65,6 +65,7 @@ def main():
 
     # For each known activity, fetch detail to get updated_at
     patched = 0
+    printed_sample = False
     for a in recent:
         aid = str(a['id'])
         if aid not in index:
@@ -74,6 +75,10 @@ def main():
             continue
         try:
             detail = api_get(f'/activities/{aid}', token)
+            if not printed_sample:
+                print(f'  Sample detail keys: {sorted(detail.keys())}')
+                print(f'  updated_at={detail.get("updated_at")}')
+                printed_sample = True
             updated_at = detail.get('updated_at', '')
             if updated_at and entry.get('updated_at') != updated_at:
                 entry['updated_at'] = updated_at
