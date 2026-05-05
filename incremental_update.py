@@ -82,13 +82,13 @@ def fetch_track(activity_id, token):
 
 
 def fetch_description(activity_id, token):
-    """Fetch the full activity detail; returns (description, updated_at)."""
+    """Fetch the full activity detail to get its description."""
     try:
         data = api_get(f'/activities/{activity_id}', token)
-        return data.get('description') or '', data.get('updated_at', '')
+        return data.get('description') or ''
     except Exception as e:
         print(f'  Warning: could not fetch description for {activity_id}: {e}')
-        return '', ''
+        return ''
 
 
 def fetch_photo(activity_id, token, photos_dir):
@@ -259,31 +259,13 @@ def main():
             activity_index = json.load(f)
     print(f'Known activities: {len(activity_index)}')
 
-    # Fetch activities from the last 7 days; check for new and modified
-    seven_days_ago = int(time.time()) - 7 * 24 * 3600
-    print('Fetching activities from the last 7 days...')
-    recent = api_get(f'/athlete/activities?after={seven_days_ago}&per_page=200', token)
+    # Fetch recent activities and find new ones
+    print('Fetching recent activities from Strava API...')
+    recent = api_get('/athlete/activities?per_page=5', token)
+    new_activities = [a for a in recent if str(a['id']) not in activity_index]
+    print(f'New activities to add: {len(new_activities)}')
 
-    new_activities = []
-    modified_activities = []
-    for a in recent:
-        aid = str(a['id'])
-        stored = activity_index.get(aid)
-        if stored is None:
-            new_activities.append(a)
-        elif stored.get('updated_at'):
-            try:
-                current = api_get(f'/activities/{aid}', token).get('updated_at', '')
-                time.sleep(0.5)
-                if current != stored['updated_at']:
-                    modified_activities.append(a)
-            except Exception as e:
-                print(f'  Warning: could not check modification for {aid}: {e}')
-
-    print(f'New activities: {len(new_activities)}')
-    print(f'Modified activities: {len(modified_activities)}')
-
-    if not new_activities and not modified_activities:
+    if not new_activities:
         print('Nothing to do.')
         return
 
@@ -292,10 +274,10 @@ def main():
     photos_dir.mkdir(parents=True, exist_ok=True)
 
     affected_months = set()
-    for a, kind in [(a, 'new') for a in new_activities] + [(a, 'modified') for a in modified_activities]:
-        act                = parse_activity(a)
-        desc, updated_at   = fetch_description(a['id'], token)
-        track              = fetch_track(a['id'], token)
+    for a in new_activities:
+        act   = parse_activity(a)
+        desc  = fetch_description(a['id'], token)
+        track = fetch_track(a['id'], token)
 
         act_dir = out_dir / str(act['year']) / f"{act['month']:02d}"
         act_dir.mkdir(parents=True, exist_ok=True)
@@ -313,19 +295,14 @@ def main():
 
         if a.get('total_photo_count', 0) > 0:
             photo_out = photos_dir / f'{act["id"]}.jpg'
-            if kind == 'modified' or not photo_out.exists():
+            if not photo_out.exists():
                 if fetch_photo(act['id'], token, photos_dir):
                     print(f'  → photo downloaded')
             time.sleep(0.5)
 
         social_tag = ' 👥' if act_data['with_friends'] else ''
-        prefix = '+' if kind == 'new' else '~'
-        print(f'  {prefix} {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi){social_tag}')
-        activity_index[act['id']] = {
-            'year': act['year'],
-            'month': act['month'],
-            'updated_at': updated_at,
-        }
+        print(f'  + {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi){social_tag}')
+        activity_index[act['id']] = {'year': act['year'], 'month': act['month']}
         affected_months.add((act['year'], act['month']))
 
         time.sleep(0.5)   # stay well within Strava rate limits
@@ -347,8 +324,7 @@ def main():
     with open(index_file, 'w') as f:
         json.dump(activity_index, f, separators=(',', ':'))
 
-    total = len(new_activities) + len(modified_activities)
-    print(f'\nDone. {len(new_activities)} new + {len(modified_activities)} modified activit{"y" if total == 1 else "ies"} processed.')
+    print(f'\nDone. {len(new_activities)} new activit{"y" if len(new_activities) == 1 else "ies"} added.')
 
 
 if __name__ == '__main__':
