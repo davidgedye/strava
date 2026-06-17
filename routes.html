@@ -224,6 +224,7 @@
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
   }
+  #title.frozen { cursor: default; }
 
   /* Loading / error message */
   #msg {
@@ -331,10 +332,12 @@ const CURRENT_YEAR  = String(_now.getFullYear());
 const MONTH_NAMES = ['January','February','March','April','May','June',
                      'July','August','September','October','November','December'];
 
+function isFrozenPeriod(period) { return period === 'social' || period === 'hikes'; }
+
 function titleFor(period) {
   if (period === 'week')    return 'This Week';
-  if (period === 'social') return 'Runs with Friends';
-  if (period === 'hikes')  return 'Hikes';
+  if (period === 'social') return 'Runs with Friends up to 6/16/26';
+  if (period === 'hikes')  return 'Hikes up to 6/16/26';
   if (/^\d{4}-\d{2}$/.test(period)) {
     const [y, m] = period.split('-');
     return MONTH_NAMES[parseInt(m) - 1] + ' ' + y;
@@ -438,6 +441,7 @@ function openPicker() {
 
 titleTextEl.addEventListener('click', e => {
   e.stopPropagation();
+  if (isFrozenPeriod(currentPeriod)) return;
   pickerEl.style.display === 'block' ? closePicker() : openPicker();
 });
 btnMenu.addEventListener('click', e => {
@@ -487,8 +491,14 @@ function updateNav() {
   btnPrev.onclick = prev ? () => navigate(prev) : null;
   btnNext.onclick = next ? () => navigate(next) : null;
 
-  btnMenu.className = '';
-  buildDropdown();
+  const frozen = isFrozenPeriod(currentPeriod);
+  titleEl.classList.toggle('frozen', frozen);
+  if (frozen) {
+    btnMenu.className = 'hidden';
+  } else {
+    btnMenu.className = '';
+    buildDropdown();
+  }
 }
 
 function navigate(period) {

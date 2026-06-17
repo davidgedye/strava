@@ -117,17 +117,9 @@ def parse_dt(s):
 RUN_TYPES = {'Run', 'Trail Run', 'Virtual Run',          # normalised (stored)
              'TrailRun', 'VirtualRun', 'Treadmill'}      # raw API sport_type
 
-HIKE_TYPES = {'Hike', 'Walk', 'Snowshoe'}
-
-
 def is_run(act):
     return (act.get('sport_type') in RUN_TYPES or
             act.get('type')       in RUN_TYPES)
-
-
-def is_hike(act):
-    return (act.get('sport_type') in HIKE_TYPES or
-            act.get('type')       in HIKE_TYPES)
 
 
 def load_all_runs(history_dir):
@@ -152,32 +144,6 @@ def load_all_runs(history_dir):
                 except Exception:
                     continue
                 if is_run(data):
-                    result.append(data)
-    return sorted(result, key=lambda a: a['date'])
-
-
-def load_all_hikes(history_dir):
-    """Load every hike/walk/snowshoe activity (tracked or not), sorted by date ascending."""
-    history = Path(history_dir)
-    result = []
-    for year_dir in history.iterdir():
-        if not year_dir.is_dir():
-            continue
-        try:
-            int(year_dir.name)
-        except ValueError:
-            continue
-        for month_dir in year_dir.iterdir():
-            if not month_dir.is_dir():
-                continue
-            for f in month_dir.iterdir():
-                if f.name == 'index.json' or f.suffix != '.json':
-                    continue
-                try:
-                    data = json.loads(f.read_text())
-                except Exception:
-                    continue
-                if is_hike(data):
                     result.append(data)
     return sorted(result, key=lambda a: a['date'])
 
@@ -424,62 +390,6 @@ def main():
             dest.write_text(json.dumps(data, separators=(',', ':')))
             print(f"  {sum(1 for a in runs if a.get('has_track'))} tracked / {len(runs)} total, "
                   f"{time.time()-t0:.1f}s", file=sys.stderr)
-
-        # ── Friends (all-time) — 2.5× canvas so routes aren't microscopic ───
-        if only_periods is not None and 'social' not in only_periods:
-            print(f"\n── social{suffix} … skipped", file=sys.stderr)
-        else:
-            friends_runs  = [a for a in all_runs if a.get('with_friends')]
-            friends_count = len(friends_runs)
-            dest_social   = out / f'social{suffix}.json'
-            cached_ok = False
-            if not force and 'social' not in force_periods and dest_social.exists():
-                try:
-                    if json.loads(dest_social.read_text()).get('friend_count') == friends_count:
-                        cached_ok = True
-                except Exception:
-                    pass
-            if cached_ok:
-                print(f"\n── social{suffix} … skipped (cached, {friends_count} friend runs)",
-                      file=sys.stderr)
-            else:
-                print(f"\n── social{suffix} …", file=sys.stderr)
-                fcw, fch = round(cw * 2.5), round(ch * 2.5)
-                t0 = time.time()
-                data = compute_layout(friends_runs, 'year', fcw, fch, seed='social')
-                data['friend_count'] = friends_count
-                dest_social.write_text(json.dumps(data, separators=(',', ':')))
-                print(f"  {sum(1 for a in friends_runs if a.get('has_track'))} tracked / "
-                      f"{friends_count} total, canvas {fcw}×{fch}, {time.time()-t0:.1f}s",
-                      file=sys.stderr)
-
-        # ── Hikes (all-time) — 2.5× canvas so routes aren't microscopic ─────
-        if only_periods is not None and 'hikes' not in only_periods:
-            print(f"\n── hikes{suffix} … skipped", file=sys.stderr)
-        else:
-            hike_acts   = load_all_hikes(history_dir)
-            hike_count  = len(hike_acts)
-            dest_hikes  = out / f'hikes{suffix}.json'
-            cached_ok = False
-            if not force and 'hikes' not in force_periods and dest_hikes.exists():
-                try:
-                    if json.loads(dest_hikes.read_text()).get('hike_count') == hike_count:
-                        cached_ok = True
-                except Exception:
-                    pass
-            if cached_ok:
-                print(f"\n── hikes{suffix} … skipped (cached, {hike_count} hikes)",
-                      file=sys.stderr)
-            else:
-                print(f"\n── hikes{suffix} …", file=sys.stderr)
-                hcw, hch = round(cw * 2.5), round(ch * 2.5)
-                t0 = time.time()
-                data = compute_layout(hike_acts, 'year', hcw, hch, seed='hikes')
-                data['hike_count'] = hike_count
-                dest_hikes.write_text(json.dumps(data, separators=(',', ':')))
-                print(f"  {sum(1 for a in hike_acts if a.get('has_track'))} tracked / "
-                      f"{hike_count} total, canvas {hcw}×{hch}, {time.time()-t0:.1f}s",
-                      file=sys.stderr)
 
     # ── Index ─────────────────────────────────────────────────────────────────
     if only_periods is not None:

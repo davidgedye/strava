@@ -123,42 +123,6 @@ jobs:
 
           dzi_periods = [year_key, month_key, 'week']
 
-          def r2_get_field(layout_key, field):
-              r = subprocess.run(
-                  ['aws', 's3', 'cp', f's3://strava-data/data/layouts/{layout_key}.json', '-',
-                   '--endpoint-url', R2_ENDPOINT],
-                  capture_output=True, text=True)
-              if r.returncode != 0:
-                  return -1
-              try:
-                  return json.loads(r.stdout).get(field, -1)
-              except Exception:
-                  return -1
-
-          # Check social
-          new_fc = json.load(open('data/layouts/social.json')).get('friend_count', 0)
-          old_fc = r2_get_field('social', 'friend_count')
-          render_social = new_fc != old_fc
-          print(f'Social friend_count: old={old_fc} new={new_fc} → render={render_social}')
-          if render_social:
-              dzi_periods.append('social')
-
-          # Check hikes
-          try:
-              new_hc = json.load(open('data/layouts/hikes.json')).get('hike_count', 0)
-          except FileNotFoundError:
-              new_hc = 0
-          old_hc = r2_get_field('hikes', 'hike_count')
-          render_hikes = new_hc != old_hc
-          print(f'Hikes hike_count: old={old_hc} new={new_hc} → render={render_hikes}')
-          if render_hikes:
-              dzi_periods.append('hikes')
-
-          # Pass render decisions to subsequent steps
-          with open(os.environ['GITHUB_ENV'], 'a') as f:
-              f.write(f'RENDER_SOCIAL={"true" if render_social else "false"}\n')
-              f.write(f'RENDER_HIKES={"true" if render_hikes else "false"}\n')
-
           # Collect photo IDs from portrait layout files (same IDs as landscape)
           photo_ids = set()
           for period in dzi_periods:
@@ -193,22 +157,6 @@ jobs:
             python3 render_dzi.py --period "$PERIOD" --photos-dir data/photos
             python3 render_dzi.py --period "$PERIOD" --photos-dir data/photos --landscape
           done
-
-          if [[ "$RENDER_SOCIAL" == "true" ]]; then
-            echo "friend_count changed — re-rendering social DZI"
-            python3 render_dzi.py --period social --photos-dir data/photos --scale 20
-            python3 render_dzi.py --period social --photos-dir data/photos --scale 15 --landscape
-          else
-            echo "friend_count unchanged — skipping social DZI render"
-          fi
-
-          if [[ "$RENDER_HIKES" == "true" ]]; then
-            echo "hike_count changed — re-rendering hikes DZI"
-            python3 render_dzi.py --period hikes --photos-dir data/photos --scale 20
-            python3 render_dzi.py --period hikes --photos-dir data/photos --scale 15 --landscape
-          else
-            echo "hike_count unchanged — skipping hikes DZI render"
-          fi
 
       - name: Upload data to R2
         env:

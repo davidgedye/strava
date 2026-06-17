@@ -17,7 +17,6 @@ import time
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from social_classifier import is_with_friends
 
 METERS_PER_MILE = 1609.344
 MAX_TRACK_POINTS = 500
@@ -284,7 +283,6 @@ def main():
 
         act_data = activity_stub(act)
         act_data['description']  = desc or None
-        act_data['with_friends'] = is_with_friends(act['name'], desc)
         act_data['has_track']    = track is not None
         if track:
             act_data['track'] = {'type': 'LineString', 'coordinates': track}
@@ -300,8 +298,7 @@ def main():
                     print(f'  → photo downloaded')
             time.sleep(0.5)
 
-        social_tag = ' 👥' if act_data['with_friends'] else ''
-        print(f'  + {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi){social_tag}')
+        print(f'  + {out_path.relative_to(out_dir)}  ({act["type"]}, {act["distance_mi"]} mi)')
         activity_index[act['id']] = {'year': act['year'], 'month': act['month']}
         affected_months.add((act['year'], act['month']))
 
