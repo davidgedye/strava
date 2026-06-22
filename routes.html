@@ -464,8 +464,6 @@ function buildDropdown() {
     { label: 'This Month',   period: CURRENT_MONTH },
     { label: 'This Year',    period: CURRENT_YEAR },
     { label: 'Lifetime',     href: 'planet.html' },
-    { label: 'With Friends', period: 'social' },
-    { label: 'Hikes',        period: 'hikes' },
   ];
   for (const item of items) {
     if (!item.href && !item.period) continue;  // skip if index not loaded yet
