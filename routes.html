@@ -334,6 +334,7 @@ window.addEventListener('resize', () => {
 let index      = null;
 let periodData = null;
 let viewer     = null;
+let osdOpenKey = null;  // dziKey() of the source currently loaded into `viewer`
 
 // ── URL param ─────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
@@ -407,9 +408,11 @@ let dziAvailable = false;  // does the current period have DZI tiles at all?
 function syncPhotoMode(period) {
   btnPhotos.classList.toggle('hidden', !dziAvailable);
   btnPhotos.classList.toggle('off', !showPhotos);
+  canvas.style.transform = '';  // clear any leftover CSS-translate drag optimisation
   if (dziAvailable && showPhotos) {
     setOSDMode(true);
     initOSD(period);
+    renderFromOSD();  // repaint immediately — reopening the same DZI source may not fire update-viewport
   } else {
     setOSDMode(false);
     render(periodData);
@@ -777,10 +780,13 @@ function initOSD(period) {
   document.getElementById('osd').style.top = topH + 'px';
 
   if (viewer) {
-    // Already open: just navigate to new DZI
-    viewer.open(dziSrc);
+    // Already open: just navigate to new DZI (skip if it's already showing this source —
+    // re-opening is wasteful and, since a toggle-driven re-open doesn't always change the
+    // viewport, isn't guaranteed to fire an update-viewport event to repaint the canvas)
+    if (osdOpenKey !== key) { viewer.open(dziSrc); osdOpenKey = key; }
     return;
   }
+  osdOpenKey = key;
 
   viewer = OpenSeadragon({
     id: 'osd',
