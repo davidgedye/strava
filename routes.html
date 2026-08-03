@@ -335,6 +335,7 @@ let index      = null;
 let periodData = null;
 let viewer     = null;
 let osdOpenKey = null;  // dziKey() of the source currently loaded into `viewer`
+let osdActive  = false; // is the OSD container currently the visible/live one?
 
 // ── URL param ─────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
@@ -729,8 +730,12 @@ function render(data) {
 
 // ── OSD-driven render ─────────────────────────────────────────────────────────
 function renderFromOSD() {
-  if (!periodData || !viewer || !viewer.isOpen()) {
-    render(periodData);  // fallback to standalone canvas render
+  if (!osdActive || !periodData || !viewer || !viewer.isOpen()) {
+    // Not in photo mode (or nothing to draw against) — plain canvas render.
+    // Also guards against stray update-viewport events firing after the OSD
+    // container is hidden (display:none collapses it to 0×0, which would
+    // otherwise divide-by-zero into a degenerate transform and blank the canvas).
+    render(periodData);
     return;
   }
   const vp     = viewer.viewport;
@@ -764,6 +769,7 @@ function renderFromOSD() {
 
 // ── OSD mode toggle ───────────────────────────────────────────────────────────
 function setOSDMode(active) {
+  osdActive = active;
   canvas.style.pointerEvents = active ? 'none' : 'auto';
   document.getElementById('osd').style.display = active ? '' : 'none';
 }
