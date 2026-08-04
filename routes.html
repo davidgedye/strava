@@ -336,6 +336,7 @@ let periodData = null;
 let viewer     = null;
 let osdOpenKey = null;  // dziKey() of the source currently loaded into `viewer`
 let osdActive  = false; // is the OSD container currently the visible/live one?
+let pendingOSDView = null; // {cx, cy, pxPerLayout} snapshot handed to OSD on its next open
 
 // ── URL param ─────────────────────────────────────────────────────────────────
 const params = new URLSearchParams(location.search);
@@ -422,6 +423,11 @@ function syncPhotoMode(period) {
 
 btnPhotos.addEventListener('click', e => {
   e.stopPropagation();
+  if (!showPhotos && dziAvailable) {
+    pendingOSDView = capturePlainView();   // carry the plain-canvas scale/pan into OSD
+  } else if (showPhotos && osdActive) {
+    captureOSDViewIntoPlain();             // carry OSD's scale/pan into the plain canvas
+  }
   showPhotos = !showPhotos;
   localStorage.setItem('showPhotos', showPhotos ? '1' : '0');
   syncPhotoMode(currentPeriod);
@@ -767,6 +773,64 @@ function renderFromOSD() {
   positionActivityName(pxPerLayout, tx, ty);
 }
 
+// ── View continuity between plain-canvas and OSD photo modes ──────────────────
+// Both render() and renderFromOSD() are anchored on the same screen point — the
+// center of the area below the title strip — so a layout-space point there can
+// be carried between the two coordinate systems (canvas 2D transform vs OSD
+// viewport) to preserve the user's scale/pan across the photo toggle.
+function screenAnchor() {
+  const topH = document.getElementById('title-strip').getBoundingClientRect().height;
+  const vh   = window.innerHeight;
+  return { ax: window.innerWidth / 2, ay: topH + (vh - topH) / 2 };
+}
+
+// Snapshot of what render() just drew: the layout-space point at screen-center,
+// and the effective screen-px-per-layout-unit scale.
+function capturePlainView() {
+  if (!periodData || !lastFit) return null;
+  const { ax, ay } = screenAnchor();
+  const pxPerLayout = lastFit * userZoom;
+  const originX = lastOx * userZoom + userPanX;
+  const originY = lastOy * userZoom + userPanY;
+  return { cx: (ax - originX) / pxPerLayout, cy: (ay - originY) / pxPerLayout, pxPerLayout };
+}
+
+// Apply a capturePlainView() snapshot to the OSD viewport (instantly, no animation).
+function applyViewToOSD(v) {
+  if (!viewer || !v || !periodData) return;
+  const layoutW = periodData.canvas_w || layoutDims().w;
+  viewer.viewport.panTo(new OpenSeadragon.Point(v.cx / layoutW, v.cy / layoutW), true);
+  viewer.viewport.zoomTo(v.pxPerLayout * layoutW / window.innerWidth, null, true);
+}
+
+// Pull OSD's current view into userZoom/userPanX/userPanY so the plain canvas
+// continues from the same visual scale/position render() last showed via OSD.
+function captureOSDViewIntoPlain() {
+  if (!viewer || !viewer.isOpen() || !periodData) return;
+  const vp     = viewer.viewport;
+  const zoom   = vp.getZoom(true);
+  const center = vp.getCenter(true);
+  const layoutW = periodData.canvas_w || layoutDims().w;
+  const pxPerLayout = zoom * window.innerWidth / layoutW;
+
+  const base = layoutDims();
+  const LAYOUT_W = periodData.canvas_w || base.w;
+  const LAYOUT_H = periodData.canvas_h || base.h;
+  const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
+  const vw    = window.innerWidth;
+  const avail = window.innerHeight - topH;
+  const fit   = Math.min(vw / LAYOUT_W, avail / LAYOUT_H);
+  const ox    = (vw - LAYOUT_W * fit) / 2;
+  const oy    = topH + (avail - LAYOUT_H * fit) / 2;
+
+  userZoom = Math.max(1, Math.min(MAX_ZOOM, pxPerLayout / fit));
+  const { ax, ay } = screenAnchor();
+  const originX = ax - center.x * layoutW * pxPerLayout;
+  const originY = ay - center.y * layoutW * pxPerLayout;
+  userPanX = originX - ox * userZoom;
+  userPanY = originY - oy * userZoom;
+}
+
 // ── OSD mode toggle ───────────────────────────────────────────────────────────
 function setOSDMode(active) {
   osdActive = active;
@@ -789,7 +853,13 @@ function initOSD(period) {
     // Already open: just navigate to new DZI (skip if it's already showing this source —
     // re-opening is wasteful and, since a toggle-driven re-open doesn't always change the
     // viewport, isn't guaranteed to fire an update-viewport event to repaint the canvas)
-    if (osdOpenKey !== key) { viewer.open(dziSrc); osdOpenKey = key; }
+    if (osdOpenKey !== key) {
+      viewer.open(dziSrc);
+      osdOpenKey = key;
+    } else if (pendingOSDView) {
+      applyViewToOSD(pendingOSDView);
+      pendingOSDView = null;
+    }
     return;
   }
   osdOpenKey = key;
@@ -813,6 +883,14 @@ function initOSD(period) {
   let osdPanDrag    = false;
   let osdDragCenter = null;  // OSD image-space center at last committed render
   let osdDragZoom   = null;  // OSD zoom at drag start
+
+  // Apply any pending view snapshot (from a plain→photo toggle) as soon as the
+  // tile source's metadata is ready — before the first paint, so there's no
+  // visible jump from home position to the carried-over scale/pan.
+  viewer.addHandler('open', () => {
+    if (pendingOSDView) { applyViewToOSD(pendingOSDView); pendingOSDView = null; }
+    renderFromOSD();
+  });
 
   let lastOSDZoom = null;
   viewer.addHandler('zoom', () => {
