@@ -835,7 +835,12 @@ function captureOSDViewIntoPlain() {
 function setOSDMode(active) {
   osdActive = active;
   canvas.style.pointerEvents = active ? 'none' : 'auto';
-  document.getElementById('osd').style.display = active ? '' : 'none';
+  // visibility, not display: display:none collapses the container to 0x0, and
+  // OpenSeadragon's own ResizeObserver reacts to that by calling viewport.resize()
+  // -> fitBounds() on the (now zero-size) container -- corrupting its internal
+  // zoom/bounds state so it drifts further off on every hide/show cycle.
+  // visibility:hidden keeps the layout box (and OSD's container size) intact.
+  document.getElementById('osd').style.visibility = active ? '' : 'hidden';
 }
 
 // ── OSD initialisation ────────────────────────────────────────────────────────
