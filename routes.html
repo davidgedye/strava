@@ -981,7 +981,7 @@ function initOSD(period) {
 
 // ── Screen → layout coordinate transform ─────────────────────────────────────
 function screenToLayout(cx, cy) {
-  if (viewer && viewer.isOpen()) {
+  if (osdActive && viewer && viewer.isOpen()) {
     const vp     = viewer.viewport;
     const zoom   = vp.getZoom(true);
     const center = vp.getCenter(true);
@@ -1130,11 +1130,11 @@ function hitTestBboxes(cx, cy) {
 function handleHover(cx, cy) {
   const hit = hitTestBboxes(cx, cy);
   const newId = hit ? hit.id : null;
-  const cursorTarget = (viewer && viewer.isOpen()) ? viewer.canvas : canvas;
+  const cursorTarget = (osdActive && viewer && viewer.isOpen()) ? viewer.canvas : canvas;
   cursorTarget.style.cursor = newId ? 'pointer' : 'default';
   if (newId !== hoveredId) {
     hoveredId = newId;
-    if (viewer && viewer.isOpen()) renderFromOSD();
+    if (osdActive && viewer && viewer.isOpen()) renderFromOSD();
     else render(periodData);
   }
 }
@@ -1148,7 +1148,7 @@ canvas.addEventListener('mouseleave', () => {
   canvas.style.cursor = 'default';
   if (hoveredId !== null) {
     hoveredId = null;
-    if (viewer && viewer.isOpen()) renderFromOSD();
+    if (osdActive && viewer && viewer.isOpen()) renderFromOSD();
     else render(periodData);
   }
 });
@@ -1179,7 +1179,7 @@ function handleCanvasClick(cx, cy) {
 
   if (!best) return;
 
-  if (viewer && viewer.isOpen()) {
+  if (osdActive && viewer && viewer.isOpen()) {
     // OSD mode: use OSD viewport navigation
     const rw = Math.max(best.maxX - best.minX, 0.001);
     const rh = Math.max(best.maxY - best.minY, 0.001);
