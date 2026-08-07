@@ -607,31 +607,26 @@ async function main() {
     map.on('mousedown', interruptFlight);
     map.on('touchstart', interruptFlight);
 
-    // Flight is split: first FLY_FRAC follows the great circle to T_END;
-    // last SETTLE_FRAC locks position at T_END and spins bearing→0 / pitch→0
-    // so the red dot stays centered throughout.
-    const SETTLE_FRAC  = 0.11;
-    const FLY_FRAC     = 1 - SETTLE_FRAC;
-    const bearingEnd   = bearingAt(T_END);
+    // The camera keeps flying the great circle toward T_END for the whole
+    // animation (reaching it exactly at raw=1) -- it never stops short. Over
+    // the last LEVEL_FRAC, bearing/pitch blend toward 0 (level, top-down)
+    // *concurrently* with the tail of that approach, so the red dot only
+    // finishes settling under the camera right as the flight itself finishes,
+    // instead of freezing position early and pivoting in place afterward.
+    const LEVEL_FRAC   = 0.11;
+    const LEVEL_START  = 1 - LEVEL_FRAC;
 
     const flightT0 = performance.now();
     (function frame(now) {
       const raw = Math.min(1, (now - flightT0) / 30000);
 
-      let camT, bearing, pitch;
-      if (raw <= FLY_FRAC) {
-        const rawPos = raw / FLY_FRAC;
-        const ease   = 0.5 * (1 - Math.cos(Math.PI * rawPos)); // ease-in-out: natural cruise feel
-        camT    = T_START + (T_END - T_START) * ease;
-        bearing = bearingAt(camT);
-        pitch   = FLIGHT_PITCH;
-      } else {
-        const s    = (raw - FLY_FRAC) / SETTLE_FRAC;
-        const ease = Math.sin(Math.PI / 2 * s);              // ease-out only: starts at full speed
-        camT    = T_END;
-        bearing = bearingEnd * (1 - ease);
-        pitch   = FLIGHT_PITCH * (1 - ease);
-      }
+      const ease = 0.5 * (1 - Math.cos(Math.PI * raw)); // ease-in-out: natural cruise feel
+      const camT = T_START + (T_END - T_START) * ease;
+
+      const levelS    = raw <= LEVEL_START ? 0 : (raw - LEVEL_START) / LEVEL_FRAC;
+      const levelEase = Math.sin(Math.PI / 2 * levelS);  // ease-out only: starts at full speed
+      const bearing = bearingAt(camT) * (1 - levelEase);
+      const pitch   = FLIGHT_PITCH * (1 - levelEase);
 
       map.jumpTo({ center: [arcToLatLon(camT).lon, arcToLatLon(camT).lat], bearing, pitch, zoom: FLIGHT_ZOOM });
       if (raw < 1) { flightId = requestAnimationFrame(frame); }
