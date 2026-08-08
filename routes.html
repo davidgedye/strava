@@ -386,6 +386,15 @@ positionMilesHud();
 window.addEventListener('resize', positionMilesHud);
 if (window.visualViewport) window.visualViewport.addEventListener('resize', positionMilesHud);
 
+// Vertical clearance to reserve at the bottom of the layout area for the HUD,
+// so route fits (initial and zoomed) don't render underneath it. Measured
+// from the HUD's actual current position, so it stays correct regardless of
+// text length or the runtime viewport correction in positionMilesHud().
+function hudReservePx() {
+  const margin = 8;
+  return (window.innerHeight - milesHud.getBoundingClientRect().top) + margin;
+}
+
 function setMiles(totalMiles, count) {
   if (!totalMiles) { milesHud.textContent = ''; return; }
   const label = currentPeriod === 'hikes' ? 'hikes' : 'runs';
@@ -732,7 +741,7 @@ function render(data) {
   const LAYOUT_W = data.canvas_w || base.w;
   const LAYOUT_H = data.canvas_h || base.h;
   const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
-  const avail = vh - topH;
+  const avail = vh - topH - hudReservePx();
   const fit = Math.min(vw / LAYOUT_W, avail / LAYOUT_H);
   const ox  = (vw - LAYOUT_W * fit) / 2;
   const oy  = topH + (avail - LAYOUT_H * fit) / 2;
@@ -798,9 +807,9 @@ function renderFromOSD() {
 // be carried between the two coordinate systems (canvas 2D transform vs OSD
 // viewport) to preserve the user's scale/pan across the photo toggle.
 function screenAnchor() {
-  const topH = document.getElementById('title-strip').getBoundingClientRect().height;
-  const vh   = window.innerHeight;
-  return { ax: window.innerWidth / 2, ay: topH + (vh - topH) / 2 };
+  const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
+  const avail = window.innerHeight - topH - hudReservePx();
+  return { ax: window.innerWidth / 2, ay: topH + avail / 2 };
 }
 
 // Snapshot of what render() just drew: the layout-space point at screen-center,
@@ -837,7 +846,7 @@ function captureOSDViewIntoPlain() {
   const LAYOUT_H = periodData.canvas_h || base.h;
   const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
   const vw    = window.innerWidth;
-  const avail = window.innerHeight - topH;
+  const avail = window.innerHeight - topH - hudReservePx();
   const fit   = Math.min(vw / LAYOUT_W, avail / LAYOUT_H);
   const ox    = (vw - LAYOUT_W * fit) / 2;
   const oy    = topH + (avail - LAYOUT_H * fit) / 2;
@@ -869,9 +878,13 @@ function initOSD(period) {
   const key    = dziKey(period);
   const dziSrc = DZI_BASE + '/' + key + '/' + key + '.dzi';
 
-  // Update OSD top to match title strip
+  // Update OSD top/bottom to match the title strip and the HUD reserve, so its
+  // container height (and thus its own home-fit zoom) stays in sync with the
+  // plain-canvas avail area used elsewhere.
   const topH = document.getElementById('title-strip').getBoundingClientRect().height;
-  document.getElementById('osd').style.top = topH + 'px';
+  const osdEl = document.getElementById('osd');
+  osdEl.style.top    = topH + 'px';
+  osdEl.style.bottom = hudReservePx() + 'px';
 
   if (viewer) {
     // Already open: just navigate to new DZI (skip if it's already showing this source —
@@ -1235,7 +1248,7 @@ function handleCanvasClick(cx, cy) {
   // Non-OSD (canvas-only) mode
   const topH  = document.getElementById('title-strip').getBoundingClientRect().height;
   const vw    = window.innerWidth;
-  const avail = window.innerHeight - topH;
+  const avail = window.innerHeight - topH - hudReservePx();
 
   if (best.id === lastZoomedId) {
     setZoomedActivity(null);
