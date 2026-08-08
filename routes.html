@@ -11,6 +11,8 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
 
+  :root { --safe-bottom: env(safe-area-inset-bottom, 0px); }
+
   html, body {
     width: 100%; height: 100%;
     background: #000;
@@ -367,6 +369,23 @@ function titleFor(period) {
 }
 
 const milesHud = document.getElementById('miles-hud');
+
+// Position the HUD from the actual runtime-visible viewport bottom, not just
+// the CSS safe-area inset: iOS can settle into a different usable viewport
+// height (e.g. once "Add to Home Screen" drops the browser chrome) than
+// window.innerHeight reports, which otherwise leaves a fixed CSS offset
+// stuck too high above the true bottom edge.
+function positionMilesHud() {
+  const vv = window.visualViewport;
+  const visibleBottom = vv ? vv.offsetTop + vv.height : window.innerHeight;
+  const safeBottom = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-bottom')) || 0;
+  const bottomPx = Math.max(16, safeBottom) + (window.innerHeight - visibleBottom);
+  milesHud.style.bottom = Math.max(0, bottomPx) + 'px';
+}
+positionMilesHud();
+window.addEventListener('resize', positionMilesHud);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', positionMilesHud);
+
 function setMiles(totalMiles, count) {
   if (!totalMiles) { milesHud.textContent = ''; return; }
   const label = currentPeriod === 'hikes' ? 'hikes' : 'runs';
