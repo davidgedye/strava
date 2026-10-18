@@ -273,7 +273,7 @@ def compute_layout(runs, kind, canvas_w=CANVAS_W, canvas_h=CANVAS_H, seed=42):
         if 'circle_radius' in item:
             entry['circle_radius'] = round(item['circle_radius'], 4)
         else:
-            entry['coords'] = [[round(c[0], 4), round(c[1], 4)] for c in item['rel_coords']]
+            entry['coords'] = [[round(c[0], 6), round(c[1], 6)] for c in item['rel_coords']]
         entry['cos_lat'] = round(item['cos_lat'], 6)
         if item.get('distance_mi') is not None:
             entry['distance_mi'] = round(item['distance_mi'])
