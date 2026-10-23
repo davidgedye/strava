@@ -3,7 +3,8 @@ name: Surgical Update
 # activities. Always re-fetches the latest data (GPS track + photo) from Strava.
 #
 # For type changes (e.g. Run→Hike), supply previous_types so the old-type periods
-# are also recomputed alongside the new ones.
+# are also recomputed alongside the new ones. Social and hikes views are frozen
+# and never recomputed.
 
 on:
   workflow_dispatch:
@@ -93,23 +94,18 @@ jobs:
                   ['aws', 's3', 'sync', src, dst, '--endpoint-url', endpoint] + excludes,
                   check=True)
 
-          needs_all = any(p in ('social', 'hikes') for p in periods)
-          if needs_all:
-              print('Downloading all history (social/hikes period affected)...')
-              s3_sync('s3://strava-data/data/history/', 'data/history/')
-          else:
-              years = set()
-              now_year = str(datetime.datetime.now().year)
-              for p in periods:
-                  if p == 'week':
-                      years.add(now_year)
-                  elif '-' in p:
-                      years.add(p.split('-')[0])
-                  else:
-                      years.add(p)  # bare year key
-              for year in sorted(years):
-                  print(f'Downloading history/{year}/...')
-                  s3_sync(f's3://strava-data/data/history/{year}/', f'data/history/{year}/')
+          years = set()
+          now_year = str(datetime.datetime.now().year)
+          for p in periods:
+              if p == 'week':
+                  years.add(now_year)
+              elif '-' in p:
+                  years.add(p.split('-')[0])
+              else:
+                  years.add(p)  # bare year key
+          for year in sorted(years):
+              print(f'Downloading history/{year}/...')
+              s3_sync(f's3://strava-data/data/history/{year}/', f'data/history/{year}/')
           PYEOF
 
       - name: Recompute affected layouts
@@ -180,24 +176,17 @@ jobs:
               print("No DZI periods to render.")
               sys.exit(0)
 
-          FIXED_SCALE = {'social': (20, 15), 'hikes': (20, 15)}
-
           for period in dzi_periods:
-              portrait_scale, landscape_scale = FIXED_SCALE.get(period, (None, None))
-
-              portrait_args  = ['--scale', str(portrait_scale)]  if portrait_scale  else []
-              landscape_args = ['--scale', str(landscape_scale)] if landscape_scale else []
-
               print(f"\nRendering {period} (portrait)...")
               subprocess.run(
                   ['python3', 'render_dzi.py', '--period', period,
-                   '--photos-dir', 'data/photos'] + portrait_args,
+                   '--photos-dir', 'data/photos'],
                   check=True)
 
               print(f"Rendering {period} (landscape)...")
               subprocess.run(
                   ['python3', 'render_dzi.py', '--period', period,
-                   '--photos-dir', 'data/photos', '--landscape'] + landscape_args,
+                   '--photos-dir', 'data/photos', '--landscape'],
                   check=True)
           PYEOF
 

@@ -6,7 +6,6 @@ determine which layout periods and DZI periods need to be recomputed.
 Usage:
     python3 affected_periods.py \
         --ids 12345678,87654321 \
-        --change-type photo|route|social|type \
         --history data/history \
         [--previous-types Run,Hike]   # parallel to --ids, required for change-type=type
 
@@ -23,8 +22,7 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-RUN_TYPES  = {'Run', 'Trail Run', 'Virtual Run', 'TrailRun', 'VirtualRun', 'Treadmill'}
-HIKE_TYPES = {'Hike', 'Walk', 'Snowshoe'}
+RUN_TYPES = {'Run', 'Trail Run', 'Virtual Run', 'TrailRun', 'VirtualRun', 'Treadmill'}
 
 
 def parse_dt(s):
@@ -68,7 +66,9 @@ def activity_type(act):
 
 
 def periods_for_activity(act, cur, type_override=None):
-    """Return set of period keys that contain this activity."""
+    """Return set of period keys that contain this activity.
+
+    Social and hikes are frozen (as of 2026-06-16) and never recomputed."""
     atype = type_override or activity_type(act)
     dt    = parse_dt(act['date'])
     mk    = f"{dt.year}-{dt.month:02d}"
@@ -81,11 +81,6 @@ def periods_for_activity(act, cur, type_override=None):
         periods.add(yk)
         if cur['week_start'] <= dt < cur['now']:
             periods.add('week')
-        if act.get('with_friends'):
-            periods.add('social')
-
-    elif atype in HIKE_TYPES:
-        periods.add('hikes')
 
     return periods
 

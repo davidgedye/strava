@@ -14,8 +14,8 @@ A personal running dashboard, hosted on GitHub Pages. A daily GitHub Action pull
 - `week` — current rolling week
 - `YYYY-MM` — a specific month
 - `YYYY` — a full year
-- `social` — runs inferred to have been done with other people
-- `hikes` — all hikes, walks, and snowshoes
+- `social` — runs inferred to have been done with other people (frozen as of 6/16/26; direct URL only)
+- `hikes` — all hikes, walks, and snowshoes (frozen as of 6/16/26; direct URL only)
 
 The routes page auto-detects portrait vs landscape and loads the appropriate layout.
 
@@ -53,7 +53,7 @@ The `update-if-new.yml` workflow runs three times daily (10am, noon, and 6pm PST
 2. **Fetch** current week/month/year summaries via `fetch-strava.sh`
 3. **Update history** — `incremental_update.py` adds JSON for any new activities and downloads their photos
 4. **Compute layouts** — `compute_layout.py` regenerates layouts for the current week/month/year (historical periods are cached)
-5. **Render DZI** — `render_dzi.py` smart-crops each activity photo to the aspect ratio of its route's bounding box, then renders Deep Zoom tiles (512 px tiles, 1 px overlap) for the current week/month/year; the social DZI is only re-rendered if the friend count changed; the hikes DZI is only re-rendered if the hike count changed
+5. **Render DZI** — `render_dzi.py` smart-crops each activity photo to the aspect ratio of its route's bounding box, then renders Deep Zoom tiles (512 px tiles, 1 px overlap) for the current week/month/year
 
    **Face-aware cropping:** two detectors are tried in order:
    - **mediapipe** (primary) — handles sunglasses, hats, non-frontal angles; confidence scores 0–1
@@ -121,13 +121,16 @@ Edit `goals.json` to whatever your weekly, monthly and yearly goals are, e.g.
 {
   "weekly_mi": 20,
   "monthly_mi": 85,
-  "yearly_mi": 1000
+  "yearly_mi": 1000,
+  "lifetime_mi": 24901
 }
 ```
 
+`lifetime_mi` is the target for the lifetime card (24,901 mi is the Earth's circumference).
+
 ### 7. First run
 
-Trigger the workflow manually: **Actions → Update If New → Run workflow**. After that it runs automatically once daily.
+Trigger the workflow manually: **Actions → Update If New → Run workflow**. After that it runs automatically three times daily.
 
 Your dashboard will be at `https://<username>.github.io/<repo>/`.
 
@@ -148,20 +151,15 @@ You do not need the `data/dzi/` directory locally — the routes page falls back
 
 ### Surgical Update
 
-When a specific activity changes (photo replaced, GPS track edited, activity type corrected, or a run flagged as social), use the **Surgical Update** workflow to recompute only the affected layouts and DZI tiles rather than a full re-render:
+When a specific activity changes (photo replaced, GPS track edited, or activity type corrected), use the **Surgical Update** workflow to recompute only the affected layouts and DZI tiles rather than a full re-render:
 
 **Actions → Surgical Update → Run workflow**
 
 Inputs:
 - `activity_ids` — comma-separated Strava activity IDs
-- `change_type` — one of:
-  - `photo` — photo added or replaced (re-renders DZI only; no layout recompute)
-  - `route` — GPS track edited (recomputes layout + DZI for affected month/year/week)
-  - `social` — `with_friends` flag toggled (recomputes social layout + DZI only)
-  - `type` — activity type changed, e.g. Run → Hike (recomputes both old and new type's periods)
-- `previous_types` — required for `change_type=type`; the activity type *before* the change, parallel to `activity_ids` (e.g. `"Run,Trail Run"`)
+- `previous_types` — only if the activity type changed: the type(s) *before* the change, parallel to `activity_ids` (e.g. `"Run,Trail Run"`), so the old type's periods are recomputed too
 
-The workflow automatically determines which periods are affected, downloads only the necessary data, recomputes layouts (skipped for `photo`), re-renders DZI tiles, and uploads the results.
+The workflow automatically determines which periods are affected, re-fetches the activities from Strava, downloads only the necessary data, recomputes layouts, re-renders DZI tiles, and uploads the results. The frozen social and hikes views are never touched.
 
 ### Backfill Activities & Photos
 
@@ -172,15 +170,6 @@ If there are gaps in history (e.g. the workflow wasn't running for a period), us
 Inputs:
 - `since` — fetch all activities on or after this date (`YYYY-MM-DD`)
 - `rerender_all` — re-render DZI for every historical period (slow, ~2 hours); leave unchecked to only re-render current week/month/year
-
-### Backfill Hikes
-
-Fetches any hike/walk/snowshoe activities since a given date via the API, recomputes the hikes layout, and re-renders hikes DZI (portrait + landscape). Useful after the initial ZIP import or when hike data has gaps.
-
-**Actions → Backfill Hikes → Run workflow**
-
-Inputs:
-- `since` — fetch all hike-type activities on or after this date (`YYYY-MM-DD`)
 
 ### Re-render All DZI
 
@@ -207,3 +196,10 @@ The dashboard is installable as a Progressive Web App. On iOS/Android, use "Add 
 | `backfill_activities.py` | Fetches missing activities and photos since a given date |
 | `extract_photos.py` | One-time: extracts photos from a Strava data export ZIP |
 | `fetch_missing_photos.py` | Fetches photos for any history activity that is missing one (use sparingly — hits Strava rate limits) |
+| `upload_dzi.py` | Syncs local `data/dzi/` to R2 |
+| `process_export.py` | One-time: converts a Strava export ZIP into history JSON |
+| `social_classifier.py` | Rules for deciding whether a run was done with friends |
+| `classify_social.py` | One-time: stamps `with_friends` on all history JSON using the classifier |
+| `review_social.py` | Generates an HTML report for reviewing the classifier's decisions |
+
+The **DZI Upload Speed Test** workflow renders and uploads a single year to measure R2 upload throughput; it is for diagnostics only.
