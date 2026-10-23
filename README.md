@@ -183,6 +183,20 @@ No inputs required.
 
 The dashboard is installable as a Progressive Web App. On iOS/Android, use "Add to Home Screen" for a full-screen, app-like experience. `manifest.json` declares the app name and icons; `sw.js` provides a network-first service worker so the shell loads offline and updates reliably after deploys.
 
+## App Icon
+
+The Home Screen / PWA icon is drawn from one activity's GPS route: GPS jitter is removed, streets are squared up to the grid, and the route is drawn as a sharp green line on a dark blue map grid. The current icon uses activity `9158465235` (May 28, 2023).
+
+To switch to a different route, keeping the same style:
+
+```bash
+pip install Pillow numpy
+python3 make_icon.py <activity_id>        # fetches the track from R2 history
+python3 make_icon.py --track track.json   # or: [[lat, lng], ...] / a history activity JSON
+```
+
+This rewrites `icons/` (`icon.svg`, `icon-180.png` for iOS, `icon-192.png` and `icon-512.png` for the manifest). Commit them, and bump `CACHE_NAME` in `sw.js` so installed copies pick up the change. iOS caches Home Screen icons, so you may need to remove and re-add the app to see a new one. Style and squaring tolerances are constants at the top of `make_icon.py`.
+
 ## Key Scripts
 
 | Script | Purpose |
@@ -195,6 +209,7 @@ The dashboard is installable as a Progressive Web App. On iOS/Android, use "Add 
 | `affected_periods.py` | Given a list of activity IDs and a change type, outputs the minimal set of layout and DZI periods that need recomputing |
 | `backfill_activities.py` | Fetches missing activities and photos since a given date |
 | `extract_photos.py` | One-time: extracts photos from a Strava data export ZIP |
+| `make_icon.py` | Generates the PWA / Home Screen icon from an activity's route |
 | `fetch_missing_photos.py` | Fetches photos for any history activity that is missing one (use sparingly — hits Strava rate limits) |
 | `upload_dzi.py` | Syncs local `data/dzi/` to R2 |
 | `process_export.py` | One-time: converts a Strava export ZIP into history JSON |
