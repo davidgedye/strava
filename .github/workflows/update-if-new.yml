@@ -1,11 +1,10 @@
 name: Update If New
-# Checks for new Strava activities three times daily; if found, fetches, processes, and publishes them
+# Checks for new Strava activities twice daily; if found, fetches, processes, and publishes them
 
 on:
   schedule:
-    - cron: "0 18 * * *"  # 10am PST (UTC-8)
-    - cron: "0 20 * * *"  # Noon PST (UTC-8)
-    - cron: "0 2 * * *"   # 6pm PST (UTC-8)
+    - cron: "0 20 * * *"  # Noon PST / 1pm PDT
+    - cron: "0 2 * * *"   # 6pm PST / 7pm PDT
   workflow_dispatch:
 
 permissions:

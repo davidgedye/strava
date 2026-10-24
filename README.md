@@ -47,7 +47,7 @@ The git repo contains only code — no data files are committed.
 
 ## Daily Workflow
 
-The `update-if-new.yml` workflow runs three times daily (10am, noon, and 6pm PST) and does the following:
+The `update-if-new.yml` workflow runs twice daily (noon and 6pm PST; 1pm and 7pm PDT) and does the following:
 
 1. **Download** `history/`, `layouts/`, and `photos/` from R2
 2. **Fetch** current week/month/year summaries via `fetch-strava.sh`
@@ -130,7 +130,7 @@ Edit `goals.json` to whatever your weekly, monthly and yearly goals are, e.g.
 
 ### 7. First run
 
-Trigger the workflow manually: **Actions → Update If New → Run workflow**. After that it runs automatically three times daily.
+Trigger the workflow manually: **Actions → Update If New → Run workflow**. After that it runs automatically twice daily.
 
 Your dashboard will be at `https://<username>.github.io/<repo>/`.
 
