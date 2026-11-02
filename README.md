@@ -47,7 +47,7 @@ The git repo contains only code — no data files are committed.
 
 ## Daily Workflow
 
-The `update-if-new.yml` workflow runs twice daily (noon and 6pm PST; 1pm and 7pm PDT) and does the following:
+The `update-if-new.yml` workflow runs twice daily (12:17pm and 6:17pm PST; 1:17pm and 7:17pm PDT — GitHub often starts scheduled runs late) and does the following:
 
 1. **Download** `history/`, `layouts/`, and `photos/` from R2
 2. **Fetch** current week/month/year summaries via `fetch-strava.sh`
