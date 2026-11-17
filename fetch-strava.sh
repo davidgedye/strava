@@ -48,7 +48,7 @@ AUTH_HEADER="Authorization: Bearer ${ACCESS_TOKEN}"
 # --- Step 2: Fetch athlete stats for YTD run totals ---
 echo "Fetching athlete info..."
 ATHLETE=$(curl -sf -H "$AUTH_HEADER" "${API_BASE}/athlete")
-ATHLETE_ID=$(echo "$ATHLETE" | jq -r '.id')
+ATHLETE_ID=$(echo "$ATHLETE" | jq -r '.id_str // (.id | tostring)')
 
 if [[ -z "$ATHLETE_ID" || "$ATHLETE_ID" == "null" ]]; then
   echo "Error: Failed to fetch athlete ID" >&2

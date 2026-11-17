@@ -47,7 +47,7 @@ jobs:
             --endpoint-url "$R2_ENDPOINT" 2>/dev/null | jq -r 'keys[]' || true)
 
           RECENT_IDS=$(curl -sf -H "Authorization: Bearer $ACCESS_TOKEN" \
-            "https://www.strava.com/api/v3/athlete/activities?per_page=5" | jq -r '.[].id | tostring')
+            "https://www.strava.com/api/v3/athlete/activities?per_page=5" | jq -r '.[] | .id_str // (.id | tostring)')
 
           NEW_ACTIVITIES=false
           while IFS= read -r id; do
