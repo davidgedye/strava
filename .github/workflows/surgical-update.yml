@@ -20,6 +20,9 @@ on:
 permissions:
   contents: read
 
+env:
+  AWS_DEFAULT_REGION: auto  # R2 rejects most AWS regions; runners in e.g. us-west-2 otherwise fail
+
 jobs:
   update:
     runs-on: ubuntu-latest
