@@ -4,7 +4,7 @@ name: Update If New
 on:
   schedule:
     - cron: "17 20 * * *"  # 12:17pm PST / 1:17pm PDT (off the hour: GitHub delays :00 runs most)
-    - cron: "17 2 * * *"   # 6:17pm PST / 7:17pm PDT
+    - cron: "17 9 * * *"   # 1:17am PST / 2:17am PDT
   workflow_dispatch:
 
 permissions:
